@@ -1,0 +1,121 @@
+.screen {
+  width: 100%;
+  min-height: 100vh;
+  overflow-y: auto;
+  background: #0d0d0f;
+  color: #ffffff;
+  padding: 18px 16px 130px;
+  margin-left: -16px;
+  margin-right: -16px;
+}
+
+.topBar {
+  padding: 0 4px 10px;
+}
+
+.backButton {
+  width: 48px;
+  height: 48px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.06);
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.backButton:focus-visible {
+  outline: 3px solid rgba(211, 47, 47, 0.35);
+  outline-offset: 2px;
+}
+
+.center {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  padding: 0 4px;
+}
+
+.placeholder {
+  width: 100%;
+  max-width: 380px;
+  aspect-ratio: 9 / 16;
+  background: #1a1a22;
+  border-radius: 18px;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.placeholder::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at 30% 20%, rgba(255, 255, 255, 0.07), transparent 55%);
+}
+
+.liveTimestamp {
+  position: absolute;
+  bottom: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0, 0, 0, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  padding: 10px 14px;
+  font-weight: 950;
+  font-size: 13px;
+  white-space: nowrap;
+  text-align: center;
+}
+
+.titleField {
+  width: 100%;
+  max-width: 380px;
+}
+
+.titleInput {
+  width: 100%;
+  min-height: 56px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.06);
+  color: #ffffff;
+  padding: 0 14px;
+  font-size: 16px;
+  font-weight: 750;
+}
+
+.titleInput::placeholder {
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.titleInput:focus-visible {
+  outline: 3px solid rgba(211, 47, 47, 0.35);
+  outline-offset: 3px;
+}
+
+.recordButton {
+  position: fixed;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  width: 92px;
+  height: 92px;
+  border-radius: 999px;
+  background: #d32f2f;
+  border: 0;
+  color: #ffffff;
+  z-index: 1000;
+  font-weight: 950;
+  font-size: 14px;
+}
+
+.recordButton:focus-visible {
+  outline: 3px solid rgba(211, 47, 47, 0.25);
+  outline-offset: 3px;
+}

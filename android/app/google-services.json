@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "796311176657",
+    "project_id": "elira-1aac7",
+    "storage_bucket": "elira-1aac7.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:796311176657:android:4302b49333854b709a0cf0",
+        "android_client_info": {
+          "package_name": "com.example.elira"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCCTuBQBzNpUd7eKtFnDd3iU33ptGX5Jow"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

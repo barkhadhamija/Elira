@@ -1,0 +1,34 @@
+.wrap {
+  width: 100%;
+}
+
+.hiddenInput {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+  pointer-events: none;
+}
+
+.dotsRow {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0 6px;
+  user-select: none;
+}
+
+.dot {
+  width: 48px;
+  height: 48px;
+  border-radius: 999px;
+  border: 2px solid rgba(0, 0, 0, 0.18);
+  background: #ffffff;
+}
+
+.dotFilled {
+  border-color: #d32f2f;
+  background: #d32f2f;
+}

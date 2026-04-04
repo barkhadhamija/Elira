@@ -34,7 +34,7 @@ class BiometricService {
         localizedReason: 'Authenticate to access your testimonies',
         options: const AuthenticationOptions(
           biometricOnly: false,
-          stickyAuth: true,
+          stickyAuth: false,
         ),
       );
     } catch (e) {

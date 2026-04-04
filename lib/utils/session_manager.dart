@@ -36,6 +36,19 @@ class SessionManager {
     await prefs.remove(_keyExpiry);
   }
 
+  /// ⚠️ DEV ONLY — wipes every key the app persists.
+  /// Call once at startup to force a fresh onboarding flow, then remove.
+  static Future<void> clearAll() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_keyLoggedIn);
+    await prefs.remove(_keyExpiry);
+    await prefs.remove(_keyOnboarding);
+    await prefs.remove(_keyPin);
+    await prefs.remove(_keyContacts);
+    await prefs.remove(_keyGpsConsent);
+    await prefs.remove(_keyBiometric);
+  }
+
   static Future<void> setOnboardingComplete() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_keyOnboarding, true);

@@ -64,7 +64,7 @@ class DefaultFirebaseOptions {
     messagingSenderId: '796311176657',
     projectId: 'elira-1aac7',
     storageBucket: 'elira-1aac7.firebasestorage.app',
-    iosBundleId: 'com.barkha.elira',
+    iosBundleId: 'dev.elira.app',
   );
 
   static const FirebaseOptions macos = FirebaseOptions(

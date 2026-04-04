@@ -108,22 +108,18 @@ class _UploadScreenState extends ConsumerState<UploadScreen> {
       body: SafeArea(
         child: Column(
           children: [
-            // Header
+            // ── Header ──────────────────────────────────────────────────────
             Padding(
-              padding: const EdgeInsets.fromLTRB(8, 8, 16, 0),
+              padding: const EdgeInsets.fromLTRB(4, 8, 72, 0),
               child: Row(
                 children: [
                   IconButton(
                     onPressed: () => context.go('/home'),
-                    icon: const Icon(
-                      Icons.arrow_back,
-                      color: AppColours.textDark,
-                    ),
+                    icon: const Icon(Icons.arrow_back_ios_new_rounded),
+                    color: AppColours.textDark,
+                    iconSize: 20,
                     padding: const EdgeInsets.all(12),
                   ),
-                  // Space so SOS button doesn't overlap
-                  const Spacer(),
-                  const SizedBox(width: 60),
                 ],
               ),
             ),
@@ -136,6 +132,7 @@ class _UploadScreenState extends ConsumerState<UploadScreen> {
                     style: GoogleFonts.dmSerifDisplay(
                       fontSize: 28,
                       color: AppColours.textDark,
+                      height: 1.2,
                     ),
                   ),
                   const SizedBox(height: 6),
@@ -148,7 +145,7 @@ class _UploadScreenState extends ConsumerState<UploadScreen> {
                   ),
                   const SizedBox(height: 28),
 
-                  // File picker zone or preview
+                  // ── File picker zone or preview ──────────────────────────
                   if (_pickedFile == null)
                     _DashedPickerZone(onTap: _pickFile)
                   else
@@ -156,13 +153,14 @@ class _UploadScreenState extends ConsumerState<UploadScreen> {
 
                   const SizedBox(height: 28),
 
-                  // Title field
+                  // ── Title field ──────────────────────────────────────────
                   Text(
                     'Label this evidence',
                     style: GoogleFonts.dmSans(
-                      fontSize: 14,
+                      fontSize: 13,
                       fontWeight: FontWeight.w600,
-                      color: AppColours.textDark,
+                      color: AppColours.textMuted,
+                      letterSpacing: 0.4,
                     ),
                   ),
                   const SizedBox(height: 8),
@@ -177,26 +175,26 @@ class _UploadScreenState extends ConsumerState<UploadScreen> {
                       hintText: 'e.g. Medical prescription — Dr. Mehta',
                       hintStyle: GoogleFonts.dmSans(
                         fontSize: 14,
-                        color: AppColours.textMuted,
+                        color: AppColours.textMuted.withOpacity(0.6),
                       ),
                       filled: true,
                       fillColor: Colors.white,
                       contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 14,
+                        horizontal: 18,
+                        vertical: 16,
                       ),
                       border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(10),
-                        borderSide:
-                            BorderSide(color: Colors.black.withOpacity(0.10)),
+                        borderRadius: BorderRadius.circular(14),
+                        borderSide: BorderSide(
+                            color: AppColours.divider, width: 1.5),
                       ),
                       enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(10),
-                        borderSide:
-                            BorderSide(color: Colors.black.withOpacity(0.10)),
+                        borderRadius: BorderRadius.circular(14),
+                        borderSide: BorderSide(
+                            color: AppColours.divider, width: 1.5),
                       ),
                       focusedBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(10),
+                        borderRadius: BorderRadius.circular(14),
                         borderSide: const BorderSide(
                           color: AppColours.accentTeal,
                           width: 1.5,
@@ -207,27 +205,28 @@ class _UploadScreenState extends ConsumerState<UploadScreen> {
 
                   const SizedBox(height: 24),
 
-                  // Category selector
+                  // ── Category selector ────────────────────────────────────
                   Text(
                     'Category',
                     style: GoogleFonts.dmSans(
-                      fontSize: 14,
+                      fontSize: 13,
                       fontWeight: FontWeight.w600,
-                      color: AppColours.textDark,
+                      color: AppColours.textMuted,
+                      letterSpacing: 0.4,
                     ),
                   ),
                   const SizedBox(height: 10),
                   Wrap(
-                    spacing: 10,
-                    runSpacing: 10,
+                    spacing: 8,
+                    runSpacing: 8,
                     children: _categories.map((cat) {
                       final selected = _selectedCategory == cat;
                       return GestureDetector(
                         onTap: () =>
                             setState(() => _selectedCategory = cat),
-                        child: Container(
-                          constraints:
-                              const BoxConstraints(minHeight: 44),
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 150),
+                          constraints: const BoxConstraints(minHeight: 40),
                           padding: const EdgeInsets.symmetric(
                             horizontal: 16,
                             vertical: 10,
@@ -235,13 +234,13 @@ class _UploadScreenState extends ConsumerState<UploadScreen> {
                           decoration: BoxDecoration(
                             color: selected
                                 ? AppColours.accentTeal
-                                : Colors.transparent,
-                            borderRadius: BorderRadius.circular(22),
+                                : Colors.white,
+                            borderRadius: BorderRadius.circular(20),
                             border: Border.all(
                               color: selected
                                   ? AppColours.accentTeal
-                                  : AppColours.textMuted
-                                      .withOpacity(0.5),
+                                  : AppColours.divider,
+                              width: 1.5,
                             ),
                           ),
                           child: Text(
@@ -261,24 +260,24 @@ class _UploadScreenState extends ConsumerState<UploadScreen> {
 
                   const SizedBox(height: 36),
 
-                  // Upload button
+                  // ── Upload button ────────────────────────────────────────
                   SizedBox(
                     width: double.infinity,
                     height: 52,
                     child: _isSuccess
                         ? Container(
                             decoration: BoxDecoration(
-                              color: Colors.green.shade50,
-                              borderRadius: BorderRadius.circular(12),
+                              color: const Color(0xFFEDF7F1),
+                              borderRadius: BorderRadius.circular(14),
                               border: Border.all(
-                                  color: Colors.green.shade300),
+                                  color: AppColours.badgeCertified
+                                      .withOpacity(0.4)),
                             ),
                             child: Row(
-                              mainAxisAlignment:
-                                  MainAxisAlignment.center,
+                              mainAxisAlignment: MainAxisAlignment.center,
                               children: [
-                                Icon(Icons.check_circle,
-                                    color: Colors.green.shade700,
+                                Icon(Icons.check_circle_rounded,
+                                    color: AppColours.badgeCertified,
                                     size: 20),
                                 const SizedBox(width: 8),
                                 Text(
@@ -286,7 +285,7 @@ class _UploadScreenState extends ConsumerState<UploadScreen> {
                                   style: GoogleFonts.dmSans(
                                     fontSize: 15,
                                     fontWeight: FontWeight.w600,
-                                    color: Colors.green.shade700,
+                                    color: AppColours.badgeCertified,
                                   ),
                                 ),
                               ],
@@ -298,10 +297,10 @@ class _UploadScreenState extends ConsumerState<UploadScreen> {
                             style: ElevatedButton.styleFrom(
                               backgroundColor: AppColours.accentTeal,
                               disabledBackgroundColor:
-                                  AppColours.textMuted.withOpacity(0.3),
+                                  AppColours.divider,
                               foregroundColor: Colors.white,
                               shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12),
+                                borderRadius: BorderRadius.circular(14),
                               ),
                               elevation: 0,
                             ),
@@ -311,7 +310,7 @@ class _UploadScreenState extends ConsumerState<UploadScreen> {
                                     height: 20,
                                     child: CircularProgressIndicator(
                                       color: Colors.white,
-                                      strokeWidth: 2.5,
+                                      strokeWidth: 2,
                                     ),
                                   )
                                 : Text(
@@ -341,7 +340,7 @@ class _UploadScreenState extends ConsumerState<UploadScreen> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         ClipRRect(
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(16),
           child: isImage && path != null
               ? Image.file(
                   File(path),
@@ -353,14 +352,14 @@ class _UploadScreenState extends ConsumerState<UploadScreen> {
                   height: 180,
                   width: double.infinity,
                   decoration: BoxDecoration(
-                    color: AppColours.primaryBackground,
-                    borderRadius: BorderRadius.circular(12),
+                    color: AppColours.accentLavenderSoft,
+                    borderRadius: BorderRadius.circular(16),
                   ),
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      const Icon(Icons.description_outlined,
-                          color: Colors.white60, size: 48),
+                      Icon(Icons.description_rounded,
+                          color: AppColours.accentTeal, size: 40),
                       const SizedBox(height: 12),
                       Padding(
                         padding:
@@ -372,7 +371,8 @@ class _UploadScreenState extends ConsumerState<UploadScreen> {
                           textAlign: TextAlign.center,
                           style: GoogleFonts.dmSans(
                             fontSize: 13,
-                            color: Colors.white70,
+                            color: AppColours.accentTeal,
+                            fontWeight: FontWeight.w500,
                           ),
                         ),
                       ),
@@ -401,9 +401,9 @@ class _UploadScreenState extends ConsumerState<UploadScreen> {
   }
 }
 
-// ---------------------------------------------------------------------------
+// ─────────────────────────────────────────────────────────────────────────────
 // Dashed border picker zone
-// ---------------------------------------------------------------------------
+// ─────────────────────────────────────────────────────────────────────────────
 class _DashedPickerZone extends StatelessWidget {
   final VoidCallback onTap;
   const _DashedPickerZone({required this.onTap});
@@ -414,8 +414,8 @@ class _DashedPickerZone extends StatelessWidget {
       onTap: onTap,
       child: CustomPaint(
         painter: _DashedBorderPainter(
-          color: AppColours.textMuted.withOpacity(0.4),
-          radius: 12,
+          color: AppColours.accentTeal.withOpacity(0.3),
+          radius: 16,
           dashWidth: 8,
           dashGap: 6,
         ),
@@ -426,9 +426,9 @@ class _DashedPickerZone extends StatelessWidget {
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               Icon(
-                Icons.cloud_upload_outlined,
-                size: 64,
-                color: AppColours.textMuted.withOpacity(0.6),
+                Icons.cloud_upload_rounded,
+                size: 48,
+                color: AppColours.accentTeal.withOpacity(0.5),
               ),
               const SizedBox(height: 12),
               Text(
@@ -436,7 +436,7 @@ class _DashedPickerZone extends StatelessWidget {
                 style: GoogleFonts.dmSans(
                   fontSize: 15,
                   fontWeight: FontWeight.w500,
-                  color: AppColours.textMuted,
+                  color: AppColours.accentTeal,
                 ),
               ),
               const SizedBox(height: 4),
@@ -444,7 +444,7 @@ class _DashedPickerZone extends StatelessWidget {
                 'Images and PDFs accepted',
                 style: GoogleFonts.dmSans(
                   fontSize: 12,
-                  color: AppColours.textMuted.withOpacity(0.7),
+                  color: AppColours.textMuted,
                 ),
               ),
             ],

@@ -12,6 +12,10 @@ class TestimonyModel {
   final String status;
   final String createdAt;
 
+  /// Device-only field. Only populated for locally recorded entries
+  /// (evidenceId starts with 'local_'). Never sent to Firestore.
+  final String? localFilePath;
+
   TestimonyModel({
     required this.evidenceId,
     required this.caseId,
@@ -25,7 +29,40 @@ class TestimonyModel {
     required this.ai,
     required this.status,
     required this.createdAt,
+    this.localFilePath,
   });
+
+  TestimonyModel copyWith({
+    String? evidenceId,
+    String? caseId,
+    String? userId,
+    String? type,
+    String? title,
+    ArweaveData? arweave,
+    BlockchainData? blockchain,
+    EncryptionData? encryption,
+    MetadataModel? metadata,
+    AiData? ai,
+    String? status,
+    String? createdAt,
+    String? localFilePath,
+  }) {
+    return TestimonyModel(
+      evidenceId: evidenceId ?? this.evidenceId,
+      caseId: caseId ?? this.caseId,
+      userId: userId ?? this.userId,
+      type: type ?? this.type,
+      title: title ?? this.title,
+      arweave: arweave ?? this.arweave,
+      blockchain: blockchain ?? this.blockchain,
+      encryption: encryption ?? this.encryption,
+      metadata: metadata ?? this.metadata,
+      ai: ai ?? this.ai,
+      status: status ?? this.status,
+      createdAt: createdAt ?? this.createdAt,
+      localFilePath: localFilePath ?? this.localFilePath,
+    );
+  }
 }
 
 class ArweaveData {

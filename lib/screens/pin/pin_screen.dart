@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
+import '../../../main.dart' show SosModal;
 import '../../theme/app_colours.dart';
 import '../../store/app_store.dart';
 import '../../utils/session_manager.dart';
@@ -22,6 +23,7 @@ class _PinScreenState extends ConsumerState<PinScreen>
   bool _hasError = false;
   bool _showingBiometric = false;
   bool _usePinInstead = false;
+  bool _biometricAvailable = false;
   late AnimationController _shakeController;
   late Animation<double> _shakeAnimation;
 
@@ -40,13 +42,11 @@ class _PinScreenState extends ConsumerState<PinScreen>
         }
       });
 
-    // Check biometric availability on mount
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       final biometricPref = await SessionManager.getBiometricEnabled();
-      // Must check both pref AND whether biometrics are actually enrolled.
-      // If user set biometricEnabled=true but later un-enrolled, fall to PIN.
       final biometricEnrolled = await BiometricService.isAvailable();
       if (!mounted) return;
+      setState(() => _biometricAvailable = biometricEnrolled);
       if (biometricPref && biometricEnrolled) {
         setState(() => _showingBiometric = true);
         _triggerBiometric();
@@ -69,8 +69,6 @@ class _PinScreenState extends ConsumerState<PinScreen>
     if (success) {
       ref.read(appProvider.notifier).setPinVerified(true);
       context.go('/home');
-    } else {
-      // Biometric failed — stay on biometric view so user can retry or switch to PIN
     }
   }
 
@@ -161,14 +159,11 @@ class _PinScreenState extends ConsumerState<PinScreen>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: AppColours.primaryBackground,
+      backgroundColor: AppColours.surface,
       body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 24),
-          child: _showingBiometric && !_usePinInstead
-              ? _buildBiometricView()
-              : _buildPinView(),
-        ),
+        child: _showingBiometric && !_usePinInstead
+            ? _buildBiometricView()
+            : _buildPinView(),
       ),
     );
   }
@@ -176,28 +171,49 @@ class _PinScreenState extends ConsumerState<PinScreen>
   Widget _buildBiometricView() {
     return Column(
       children: [
-        const SizedBox(height: 48),
-        Text(
-          'ELIRA',
-          style: GoogleFonts.dmSerifDisplay(
-            fontSize: 28,
-            color: AppColours.textLight,
-            letterSpacing: 3,
+        // Header
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+          child: Row(
+            children: [
+              Icon(Icons.location_on_outlined,
+                  color: AppColours.brandBlue, size: 20),
+              const SizedBox(width: 6),
+              Text(
+                'ELIRA',
+                style: GoogleFonts.inter(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w800,
+                  color: AppColours.brandBlue,
+                  letterSpacing: 1.5,
+                ),
+              ),
+              const Spacer(),
+              _SOSButton(),
+            ],
           ),
         ),
         const Spacer(),
         GestureDetector(
           onTap: _triggerBiometric,
-          child: const Icon(
-            Icons.fingerprint,
-            size: 72,
-            color: AppColours.accentTeal,
+          child: Container(
+            width: 88,
+            height: 88,
+            decoration: BoxDecoration(
+              color: AppColours.accentLavenderSoft,
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(
+              Icons.fingerprint,
+              size: 48,
+              color: AppColours.brandBlue,
+            ),
           ),
         ),
         const SizedBox(height: 20),
         Text(
           'Touch to unlock',
-          style: GoogleFonts.dmSans(
+          style: GoogleFonts.inter(
             fontSize: 16,
             color: AppColours.textMuted,
           ),
@@ -207,9 +223,10 @@ class _PinScreenState extends ConsumerState<PinScreen>
           onPressed: _switchToPin,
           child: Text(
             'Use PIN instead',
-            style: GoogleFonts.dmSans(
-              color: AppColours.textMuted,
+            style: GoogleFonts.inter(
+              color: AppColours.brandBlue,
               fontSize: 14,
+              fontWeight: FontWeight.w500,
             ),
           ),
         ),
@@ -228,89 +245,176 @@ class _PinScreenState extends ConsumerState<PinScreen>
         onTap: () => _focusNode.requestFocus(),
         child: Column(
           children: [
-            const SizedBox(height: 48),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(
-                  'ELIRA',
-                  style: GoogleFonts.dmSerifDisplay(
-                    fontSize: 28,
-                    color: AppColours.textLight,
-                    letterSpacing: 3,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                _BiometricToggleButton(),
-              ],
-            ),
-            const Spacer(),
-            Text(
-              'Enter your PIN',
-              style: GoogleFonts.dmSerifDisplay(
-                fontSize: 28,
-                color: AppColours.textLight,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              _hasError
-                  ? 'Incorrect PIN. Try again.'
-                  : 'Type your 4-digit PIN',
-              style: GoogleFonts.dmSans(
-                fontSize: 13,
-                color: _hasError
-                    ? AppColours.dangerRed
-                    : AppColours.textLight.withValues(alpha: 0.4),
-              ),
-            ),
-            const SizedBox(height: 40),
-            AnimatedBuilder(
-              animation: _shakeAnimation,
-              builder: (context, child) {
-                return Transform.translate(
-                  offset: Offset(_shakeAnimation.value, 0),
-                  child: child,
-                );
-              },
+            // Header
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
               child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: List.generate(4, (i) {
-                  final filled = i < _pin.length;
-                  return Container(
-                    width: 18,
-                    height: 18,
-                    margin: const EdgeInsets.symmetric(horizontal: 12),
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: filled
-                          ? AppColours.accentTeal
-                          : Colors.transparent,
-                      border: Border.all(
-                        color: _hasError
-                            ? AppColours.dangerRed
-                            : AppColours.textLight.withValues(alpha: 0.4),
-                        width: 2,
+                children: [
+                  Icon(Icons.location_on_outlined,
+                      color: AppColours.brandBlue, size: 20),
+                  const SizedBox(width: 6),
+                  Text(
+                    'ELIRA',
+                    style: GoogleFonts.inter(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w800,
+                      color: AppColours.brandBlue,
+                      letterSpacing: 1.5,
+                    ),
+                  ),
+                  const Spacer(),
+                  _SOSButton(),
+                ],
+              ),
+            ),
+
+            Expanded(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.symmetric(horizontal: 32),
+                child: Column(
+                  children: [
+                    const SizedBox(height: 36),
+                    Text(
+                      'Verify Identity',
+                      style: GoogleFonts.inter(
+                        fontSize: 28,
+                        fontWeight: FontWeight.w800,
+                        color: AppColours.textDark,
                       ),
                     ),
-                  );
-                }),
-              ),
-            ),
-            const SizedBox(height: 20),
-            _buildNumpad(),
-            const Spacer(),
-            TextButton(
-              onPressed: () => context.go('/login'),
-              child: Text(
-                'Sign in with a different account',
-                style: GoogleFonts.dmSans(
-                  color: AppColours.textLight.withValues(alpha: 0.35),
-                  fontSize: 13,
+                    const SizedBox(height: 8),
+                    Text(
+                      'Enter your secure access pin to continue',
+                      textAlign: TextAlign.center,
+                      style: GoogleFonts.inter(
+                        fontSize: 13,
+                        color: AppColours.textMuted,
+                      ),
+                    ),
+                    const SizedBox(height: 32),
+
+                    // PIN dots
+                    AnimatedBuilder(
+                      animation: _shakeAnimation,
+                      builder: (context, child) {
+                        return Transform.translate(
+                          offset: Offset(_shakeAnimation.value, 0),
+                          child: child,
+                        );
+                      },
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: List.generate(4, (i) {
+                          final filled = i < _pin.length;
+                          return Container(
+                            width: 18,
+                            height: 18,
+                            margin: const EdgeInsets.symmetric(horizontal: 10),
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: filled
+                                  ? AppColours.brandBlue
+                                  : Colors.transparent,
+                              border: Border.all(
+                                color: _hasError
+                                    ? AppColours.dangerRed
+                                    : (filled
+                                        ? AppColours.brandBlue
+                                        : AppColours.borderLight),
+                                width: 2,
+                              ),
+                            ),
+                          );
+                        }),
+                      ),
+                    ),
+                    const SizedBox(height: 32),
+
+                    // Numpad
+                    _buildNumpad(),
+                    const SizedBox(height: 24),
+
+                    // Biometric prompt button
+                    if (_biometricAvailable)
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 20, vertical: 12),
+                        decoration: BoxDecoration(
+                          color: AppColours.cardBackground,
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(color: AppColours.divider),
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            const Icon(Icons.fingerprint,
+                                color: AppColours.textMuted, size: 20),
+                            const SizedBox(width: 8),
+                            Text(
+                              'BIOMETRIC PROMPT',
+                              style: GoogleFonts.inter(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700,
+                                color: AppColours.textMuted,
+                                letterSpacing: 1.2,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    const SizedBox(height: 16),
+
+                    TextButton(
+                      onPressed: _biometricAvailable ? _switchToPin : null,
+                      child: Text(
+                        'Use PIN instead',
+                        style: GoogleFonts.inter(
+                          color: AppColours.brandBlue,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Icon(Icons.lock_outline,
+                            size: 12, color: AppColours.textMuted),
+                        const SizedBox(width: 4),
+                        Text(
+                          'END-TO-END ENCRYPTED VAULT',
+                          style: GoogleFonts.inter(
+                            fontSize: 9,
+                            color: AppColours.textMuted,
+                            letterSpacing: 1,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 24),
+
+                    // Demo shortcut
+                    TextButton(
+                      onPressed: () {
+                        ref.read(appProvider.notifier).setPinVerified(true);
+                        context.go('/home');
+                      },
+                      child: Text(
+                        '⚡ Skip PIN (demo)',
+                        style: GoogleFonts.inter(
+                          color: AppColours.brandBlue.withOpacity(0.6),
+                          fontSize: 12,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                  ],
                 ),
               ),
             ),
-            const SizedBox(height: 24),
           ],
         ),
       ),
@@ -322,7 +426,7 @@ class _PinScreenState extends ConsumerState<PinScreen>
       ['1', '2', '3'],
       ['4', '5', '6'],
       ['7', '8', '9'],
-      ['', '0', '⌫'],
+      ['biometric', '0', '⌫'],
     ];
 
     return Column(
@@ -332,8 +436,23 @@ class _PinScreenState extends ConsumerState<PinScreen>
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: row.map((label) {
-              if (label.isEmpty) {
-                return const SizedBox(width: 80, height: 56);
+              if (label == 'biometric') {
+                return GestureDetector(
+                  onTap: _biometricAvailable ? _triggerBiometric : null,
+                  child: SizedBox(
+                    width: 80,
+                    height: 60,
+                    child: Center(
+                      child: Icon(
+                        Icons.fingerprint,
+                        color: _biometricAvailable
+                            ? AppColours.brandBlue
+                            : AppColours.borderLight,
+                        size: 30,
+                      ),
+                    ),
+                  ),
+                );
               }
               final isBackspace = label == '⌫';
               return GestureDetector(
@@ -346,25 +465,20 @@ class _PinScreenState extends ConsumerState<PinScreen>
                 },
                 child: Container(
                   width: 80,
-                  height: 56,
+                  height: 60,
                   margin: const EdgeInsets.symmetric(horizontal: 8),
-                  decoration: BoxDecoration(
-                    color: isBackspace
-                        ? Colors.transparent
-                        : Colors.white.withValues(alpha: 0.07),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
                   child: Center(
-                    child: Text(
-                      label,
-                      style: GoogleFonts.dmSans(
-                        fontSize: isBackspace ? 20 : 22,
-                        fontWeight: FontWeight.w500,
-                        color: isBackspace
-                            ? AppColours.textLight.withValues(alpha: 0.5)
-                            : AppColours.textLight,
-                      ),
-                    ),
+                    child: isBackspace
+                        ? Icon(Icons.backspace_outlined,
+                            color: AppColours.textMuted, size: 22)
+                        : Text(
+                            label,
+                            style: GoogleFonts.inter(
+                              fontSize: 28,
+                              fontWeight: FontWeight.w400,
+                              color: AppColours.textDark,
+                            ),
+                          ),
                   ),
                 ),
               );
@@ -376,65 +490,45 @@ class _PinScreenState extends ConsumerState<PinScreen>
   }
 }
 
-// ---------------------------------------------------------------------------
-// _BiometricToggleButton — small fingerprint icon next to the ELIRA title
-// on the PIN screen. Tapping it toggles Face ID / fingerprint on or off.
-// Only visible on devices that have biometric hardware.
-// ---------------------------------------------------------------------------
-class _BiometricToggleButton extends StatefulWidget {
-  const _BiometricToggleButton();
-
-  @override
-  State<_BiometricToggleButton> createState() => _BiometricToggleButtonState();
-}
-
-class _BiometricToggleButtonState extends State<_BiometricToggleButton> {
-  bool _hardwareAvailable = false;
-  bool _enabled = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-  }
-
-  Future<void> _load() async {
-    final hw = await BiometricService.isHardwareSupported();
-    final pref = await SessionManager.getBiometricEnabled();
-    if (mounted) setState(() { _hardwareAvailable = hw; _enabled = pref; });
-  }
-
-  Future<void> _toggle() async {
-    final next = !_enabled;
-    await SessionManager.saveBiometricEnabled(next);
-    if (mounted) setState(() => _enabled = next);
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(next
-              ? 'Face ID / fingerprint enabled'
-              : 'Face ID / fingerprint disabled'),
-          duration: const Duration(seconds: 2),
-        ),
-      );
-    }
-  }
-
+// ── SOS Button ───────────────────────────────────────────────────────────────
+class _SOSButton extends StatelessWidget {
+  const _SOSButton();
   @override
   Widget build(BuildContext context) {
-    if (!_hardwareAvailable) return const SizedBox.shrink();
-    return Tooltip(
-      message: _enabled ? 'Disable biometric unlock' : 'Enable Face ID / fingerprint',
-      child: GestureDetector(
-        onTap: _toggle,
-        child: Icon(
-          _enabled ? Icons.fingerprint : Icons.fingerprint_outlined,
-          color: _enabled
-              ? AppColours.accentTeal
-              : AppColours.textLight.withValues(alpha: 0.3),
-          size: 22,
+    return GestureDetector(
+      onTap: () => showDialog(
+        context: context,
+        barrierColor: Colors.black87,
+        barrierDismissible: false,
+        builder: (_) => const SosModal(),
+      ),
+      child: Container(
+        width: 50,
+        height: 50,
+        decoration: BoxDecoration(
+          color: AppColours.dangerRed,
+          shape: BoxShape.circle,
+          boxShadow: [
+            BoxShadow(
+              color: AppColours.dangerRed.withOpacity(0.35),
+              blurRadius: 10,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Center(
+          child: Text(
+            'SOS',
+            style: GoogleFonts.inter(
+              fontSize: 12,
+              fontWeight: FontWeight.w800,
+              color: Colors.white,
+              letterSpacing: 0.5,
+            ),
+          ),
         ),
       ),
     );
   }
 }
+

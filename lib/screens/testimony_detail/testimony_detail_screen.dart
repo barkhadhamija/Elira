@@ -1,8 +1,12 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:video_player/video_player.dart';
+
 import '../../theme/app_colours.dart';
 import '../../store/app_store.dart';
 import '../../data/mock_data.dart';
@@ -19,8 +23,13 @@ class TestimonyDetailScreen extends ConsumerStatefulWidget {
 
 class _TestimonyDetailScreenState extends ConsumerState<TestimonyDetailScreen>
     with SingleTickerProviderStateMixin {
+  // ── Pulse animation for pending entries ──────────────────────────────────
   late AnimationController _pulseController;
   late Animation<double> _pulseAnimation;
+
+  // ── Video playback ───────────────────────────────────────────────────────
+  VideoPlayerController? _videoController;
+  bool _videoInitialized = false;
 
   @override
   void initState() {
@@ -32,14 +41,71 @@ class _TestimonyDetailScreenState extends ConsumerState<TestimonyDetailScreen>
     _pulseAnimation = Tween<double>(begin: 0.3, end: 1.0).animate(
       CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
     );
+
+    WidgetsBinding.instance.addPostFrameCallback((_) => _initVideo());
   }
 
   @override
   void dispose() {
     _pulseController.dispose();
+    if (_videoInitialized) {
+      _videoController?.dispose();
+    }
     super.dispose();
   }
 
+  // ── Video initialisation ─────────────────────────────────────────────────
+  Future<void> _initVideo() async {
+    final testimony = _findTestimony();
+    if (testimony == null) return;
+
+    // Only initialise for locally recorded entries that still exist on disk
+    final filePath = testimony.localFilePath;
+    if (filePath == null || !File(filePath).existsSync()) return;
+
+    final expectedSecs = testimony.metadata.duration ?? 0;
+
+    VideoPlayerController ctrl = VideoPlayerController.file(File(filePath));
+    try {
+      await ctrl.initialize();
+      await ctrl.seekTo(Duration.zero);
+
+      final reportedSecs = ctrl.value.duration.inSeconds;
+      debugPrint('TestimonyDetail — expected: ${expectedSecs}s, reported: ${reportedSecs}s');
+
+      // If the reported duration is significantly less than what was recorded
+      // (more than 3 s gap) or zero, iOS has not yet flushed the moov atom —
+      // dispose and reinitialise once after a short wait.
+      final bool durationUnreliable = reportedSecs == 0 ||
+          (expectedSecs > 0 && (expectedSecs - reportedSecs) > 3);
+
+      if (durationUnreliable) {
+        debugPrint('TestimonyDetail — Duration mismatch, retrying after 1s...');
+        await ctrl.dispose();
+        await Future.delayed(const Duration(seconds: 1));
+        ctrl = VideoPlayerController.file(File(filePath));
+        await ctrl.initialize();
+        await ctrl.seekTo(Duration.zero);
+        debugPrint('TestimonyDetail — Retry duration: ${ctrl.value.duration}');
+      }
+
+      ctrl.setLooping(false);
+      ctrl.addListener(() {
+        if (mounted) setState(() {});
+      });
+      if (mounted) {
+        setState(() {
+          _videoController = ctrl;
+          _videoInitialized = true;
+        });
+      }
+    } catch (e) {
+      debugPrint('TestimonyDetail — video init error: $e');
+      ctrl.dispose();
+    }
+  }
+
+  // ── Lookup testimony ─────────────────────────────────────────────────────
   TestimonyModel? _findTestimony() {
     final storeTestimonies = ref.read(appProvider).testimonies;
     final all = [...storeTestimonies, ...mockTestimonies];
@@ -50,6 +116,7 @@ class _TestimonyDetailScreenState extends ConsumerState<TestimonyDetailScreen>
     }
   }
 
+  // ── Formatting helpers ───────────────────────────────────────────────────
   String _formatFullDate(String iso) {
     try {
       final dt = DateTime.parse(iso);
@@ -68,6 +135,8 @@ class _TestimonyDetailScreenState extends ConsumerState<TestimonyDetailScreen>
   String _formatDuration(int seconds) {
     final m = seconds ~/ 60;
     final s = seconds % 60;
+    if (m == 0) return '$s sec';
+    if (s == 0) return '$m min';
     return '$m min $s sec';
   }
 
@@ -76,7 +145,7 @@ class _TestimonyDetailScreenState extends ConsumerState<TestimonyDetailScreen>
     return '${tx.substring(0, 8)}...${tx.substring(tx.length - 8)}';
   }
 
-  void _copyToClipboard(BuildContext context, String value, String label) {
+  void _copyToClipboard(String value) {
     Clipboard.setData(ClipboardData(text: value));
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -91,6 +160,7 @@ class _TestimonyDetailScreenState extends ConsumerState<TestimonyDetailScreen>
     );
   }
 
+  // ── Status badge ─────────────────────────────────────────────────────────
   Widget _buildStatusBadge(String status) {
     Color bg;
     Color textColor;
@@ -128,49 +198,162 @@ class _TestimonyDetailScreenState extends ConsumerState<TestimonyDetailScreen>
     );
   }
 
-  Widget _buildMediaPlaceholder(String type) {
-    IconData icon;
-    String tapLabel;
-    switch (type) {
-      case 'video':
-        icon = Icons.play_circle_outline;
-        tapLabel = 'Tap to play';
-        break;
-      case 'image':
-        icon = Icons.image_outlined;
-        tapLabel = 'Tap to view';
-        break;
-      default:
-        icon = Icons.description_outlined;
-        tapLabel = 'Tap to view';
-    }
+  // ── Video section ─────────────────────────────────────────────────────────
+  Widget _buildVideoSection(TestimonyModel testimony) {
+    final isPlayable = _videoInitialized && _videoController != null;
+    final ctrl = _videoController;
+    final isPlaying = ctrl?.value.isPlaying ?? false;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        AspectRatio(
-          aspectRatio: 16 / 9,
-          child: Container(
-            decoration: BoxDecoration(
-              color: AppColours.primaryBackground,
-              borderRadius: BorderRadius.circular(12),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: AspectRatio(
+            aspectRatio: 16 / 9,
+            child: Stack(
+              children: [
+                // ── Background / video frame ───────────────────────────
+                if (isPlayable)
+                  VideoPlayer(ctrl!)
+                else
+                  Container(color: const Color(0xFF1C1A2E)),
+
+                // ── Placeholder overlay for non-playable entries ───────
+                if (!isPlayable)
+                  Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.cloud_outlined,
+                          color: Colors.white54,
+                          size: 48,
+                        ),
+                        const SizedBox(height: 10),
+                        Text(
+                          'Available after Arweave upload',
+                          style: GoogleFonts.dmSans(
+                            fontSize: 13,
+                            color: Colors.white54,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                // ── Play / pause button for playable entries ───────────
+                if (isPlayable)
+                  GestureDetector(
+                    onTap: () {
+                      if (isPlaying) {
+                        ctrl!.pause();
+                      } else {
+                        ctrl!.play();
+                      }
+                      setState(() {});
+                    },
+                    child: Center(
+                      child: AnimatedOpacity(
+                        opacity: isPlaying ? 0.0 : 1.0,
+                        duration: const Duration(milliseconds: 200),
+                        child: Container(
+                          width: 64,
+                          height: 64,
+                          decoration: const BoxDecoration(
+                            color: Colors.black45,
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(
+                            Icons.play_circle_outline,
+                            color: Colors.white,
+                            size: 48,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+
+                // ── Progress bar — only for playable entries ───────────
+                if (isPlayable)
+                  Positioned(
+                    bottom: 0,
+                    left: 0,
+                    right: 0,
+                    child: VideoProgressIndicator(
+                      ctrl!,
+                      allowScrubbing: true,
+                      colors: VideoProgressColors(
+                        playedColor: AppColours.accentTeal,
+                        bufferedColor: AppColours.accentTeal.withOpacity(0.2),
+                        backgroundColor: Colors.white24,
+                      ),
+                      padding: EdgeInsets.zero,
+                    ),
+                  ),
+
+                // ── Fullscreen button — only for playable entries ──────
+                if (isPlayable)
+                  Positioned(
+                    bottom: 8,
+                    right: 8,
+                    child: GestureDetector(
+                      onTap: () {
+                        Navigator.of(context).push(
+                          _FullscreenVideoRoute(videoController: ctrl!),
+                        );
+                      },
+                      child: Container(
+                        width: 36,
+                        height: 36,
+                        decoration: BoxDecoration(
+                          color: Colors.black45,
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: const Icon(
+                          Icons.fullscreen,
+                          color: Colors.white,
+                          size: 22,
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
             ),
-            child: Center(
-              child: Icon(icon, color: Colors.white, size: 52),
-            ),
-          ),
-        ),
-        const SizedBox(height: 8),
-        Text(
-          tapLabel,
-          style: GoogleFonts.dmSans(
-            fontSize: 12,
-            color: AppColours.textMuted,
           ),
         ),
       ],
     );
   }
 
+  // ── Non-video media placeholder ───────────────────────────────────────────
+  Widget _buildMediaPlaceholder(String type) {
+    IconData icon;
+    switch (type) {
+      case 'image':
+        icon = Icons.image_outlined;
+        break;
+      case 'audio':
+        icon = Icons.mic_outlined;
+        break;
+      default:
+        icon = Icons.description_outlined;
+    }
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(12),
+      child: AspectRatio(
+        aspectRatio: 16 / 9,
+        child: Container(
+          color: AppColours.primaryBackground,
+          child: Center(
+            child: Icon(icon, color: Colors.white54, size: 52),
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ── Entity chip ───────────────────────────────────────────────────────────
   Widget _buildEntityChip(String label) {
     return Container(
       margin: const EdgeInsets.only(right: 8, bottom: 8),
@@ -190,30 +373,63 @@ class _TestimonyDetailScreenState extends ConsumerState<TestimonyDetailScreen>
     );
   }
 
-  Widget _buildSection(String title, Widget content) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 24),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+  // ── TX hash row ───────────────────────────────────────────────────────────
+  Widget _buildTxRow({required String label, required String fullValue}) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: AppColours.accentLavenderSoft,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
         children: [
           Text(
-            title,
+            label,
             style: GoogleFonts.dmSans(
-              fontSize: 16,
+              fontSize: 13,
               fontWeight: FontWeight.w600,
               color: AppColours.textDark,
             ),
           ),
-          const SizedBox(height: 12),
-          content,
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              _truncateTx(fullValue),
+              style: GoogleFonts.dmSans(
+                fontSize: 12,
+                color: AppColours.textMuted,
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          GestureDetector(
+            onTap: () => _copyToClipboard(fullValue),
+            child: const Padding(
+              padding: EdgeInsets.only(left: 8),
+              child: Icon(
+                Icons.copy_outlined,
+                size: 16,
+                color: AppColours.textMuted,
+              ),
+            ),
+          ),
         ],
       ),
     );
   }
 
+  // ── Main build ────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
-    final testimony = _findTestimony();
+    // Watch so we react if new testimonies are added
+    final storeTestimonies = ref.watch(appProvider).testimonies;
+    final all = [...storeTestimonies, ...mockTestimonies];
+    TestimonyModel? testimony;
+    try {
+      testimony = all.firstWhere((t) => t.evidenceId == widget.evidenceId);
+    } catch (_) {
+      testimony = null;
+    }
 
     if (testimony == null) {
       return Scaffold(
@@ -227,10 +443,9 @@ class _TestimonyDetailScreenState extends ConsumerState<TestimonyDetailScreen>
                   alignment: Alignment.centerLeft,
                   child: IconButton(
                     onPressed: () => context.go('/home'),
-                    icon: const Icon(
-                      Icons.arrow_back,
-                      color: AppColours.textDark,
-                    ),
+                    icon: const Icon(Icons.arrow_back, color: AppColours.textDark),
+                    padding: const EdgeInsets.all(12),
+                    constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
                   ),
                 ),
               ),
@@ -266,6 +481,7 @@ class _TestimonyDetailScreenState extends ConsumerState<TestimonyDetailScreen>
       backgroundColor: AppColours.surface,
       body: CustomScrollView(
         slivers: [
+          // ── Top bar ───────────────────────────────────────────────────
           SliverToBoxAdapter(
             child: SafeArea(
               child: Padding(
@@ -275,12 +491,10 @@ class _TestimonyDetailScreenState extends ConsumerState<TestimonyDetailScreen>
                   children: [
                     IconButton(
                       onPressed: () => context.go('/home'),
-                      icon: const Icon(
-                        Icons.arrow_back,
-                        color: AppColours.textDark,
-                      ),
+                      icon: const Icon(Icons.arrow_back, color: AppColours.textDark),
                       iconSize: 24,
                       padding: const EdgeInsets.all(12),
+                      constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
                     ),
                     const Spacer(),
                     _buildStatusBadge(testimony.status),
@@ -292,7 +506,7 @@ class _TestimonyDetailScreenState extends ConsumerState<TestimonyDetailScreen>
             ),
           ),
 
-          // Title
+          // ── Title ─────────────────────────────────────────────────────
           SliverToBoxAdapter(
             child: Padding(
               padding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
@@ -318,7 +532,7 @@ class _TestimonyDetailScreenState extends ConsumerState<TestimonyDetailScreen>
                   const SizedBox(height: 8),
                   Row(
                     children: [
-                      Icon(
+                      const Icon(
                         Icons.location_on_outlined,
                         size: 14,
                         color: AppColours.textMuted,
@@ -340,155 +554,148 @@ class _TestimonyDetailScreenState extends ConsumerState<TestimonyDetailScreen>
             ),
           ),
 
-          // Media placeholder
+          // ── Video / media section ──────────────────────────────────────
           SliverToBoxAdapter(
             child: Padding(
               padding: const EdgeInsets.fromLTRB(24, 20, 24, 0),
-              child: type == 'audio'
-                  ? _buildMediaPlaceholder('audio')
+              child: type == 'video'
+                  ? _buildVideoSection(testimony)
                   : _buildMediaPlaceholder(type),
             ),
           ),
 
-          // AI Summary section
+          // ── AI Summary ────────────────────────────────────────────────
           SliverToBoxAdapter(
             child: Padding(
               padding: const EdgeInsets.fromLTRB(24, 28, 24, 0),
-              child: _buildSection(
-                '',
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Text(
-                          'AI Generated Summary',
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Text(
+                        'AI Generated Summary',
+                        style: GoogleFonts.dmSans(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                          color: AppColours.textDark,
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: AppColours.accentTeal,
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Text(
+                          'AI',
                           style: GoogleFonts.dmSans(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w600,
-                            color: AppColours.textDark,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                            color: Colors.white,
                           ),
                         ),
-                        const SizedBox(width: 10),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 8, vertical: 3),
-                          decoration: BoxDecoration(
-                            color: AppColours.accentTeal,
-                            borderRadius: BorderRadius.circular(10),
-                          ),
-                          child: Text(
-                            'AI',
-                            style: GoogleFonts.dmSans(
-                              fontSize: 11,
-                              fontWeight: FontWeight.w700,
-                              color: Colors.white,
-                            ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  if (testimony.ai.summary.toLowerCase().contains('pending')) ...[
+                    Text(
+                      testimony.ai.summary,
+                      style: GoogleFonts.dmSans(
+                        fontSize: 15,
+                        color: AppColours.textMuted,
+                        fontStyle: FontStyle.italic,
+                        height: 1.6,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Row(
+                      children: [
+                        const Icon(Icons.access_time,
+                            size: 14, color: AppColours.textMuted),
+                        const SizedBox(width: 6),
+                        Text(
+                          'Analysis in progress',
+                          style: GoogleFonts.dmSans(
+                            fontSize: 12,
+                            color: AppColours.textMuted,
                           ),
                         ),
                       ],
                     ),
-                    const SizedBox(height: 12),
-                    if (testimony.ai.summary.toLowerCase().contains('pending'))
-                      ...[
-                      Text(
-                        testimony.ai.summary,
-                        style: GoogleFonts.dmSans(
-                          fontSize: 15,
-                          color: AppColours.textMuted,
-                          fontStyle: FontStyle.italic,
-                          height: 1.6,
-                        ),
+                  ] else ...[
+                    Text(
+                      testimony.ai.summary,
+                      style: GoogleFonts.dmSans(
+                        fontSize: 15,
+                        color: AppColours.textDark,
+                        height: 1.6,
                       ),
-                      const SizedBox(height: 10),
-                      Row(
-                        children: [
-                          const Icon(
-                            Icons.access_time,
-                            size: 14,
-                            color: AppColours.textMuted,
-                          ),
-                          const SizedBox(width: 6),
-                          Text(
-                            'Analysis in progress',
-                            style: GoogleFonts.dmSans(
-                              fontSize: 12,
-                              color: AppColours.textMuted,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ] else ...[
-                      Text(
-                        testimony.ai.summary,
-                        style: GoogleFonts.dmSans(
-                          fontSize: 15,
-                          color: AppColours.textDark,
-                          height: 1.6,
-                        ),
-                      ),
-                    ],
-                    if (testimony.ai.entities.persons.isNotEmpty) ...[
-                      const SizedBox(height: 16),
-                      Text(
-                        'People mentioned:',
-                        style: GoogleFonts.dmSans(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          color: AppColours.textMuted,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Wrap(
-                        children: testimony.ai.entities.persons
-                            .map(_buildEntityChip)
-                            .toList(),
-                      ),
-                    ],
-                    if (testimony.ai.entities.dates.isNotEmpty) ...[
-                      const SizedBox(height: 8),
-                      Text(
-                        'Dates mentioned:',
-                        style: GoogleFonts.dmSans(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          color: AppColours.textMuted,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Wrap(
-                        children: testimony.ai.entities.dates
-                            .map(_buildEntityChip)
-                            .toList(),
-                      ),
-                    ],
-                    if (testimony.ai.entities.locations.isNotEmpty) ...[
-                      const SizedBox(height: 8),
-                      Text(
-                        'Locations:',
-                        style: GoogleFonts.dmSans(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          color: AppColours.textMuted,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Wrap(
-                        children: testimony.ai.entities.locations
-                            .map(_buildEntityChip)
-                            .toList(),
-                      ),
-                    ],
+                    ),
                   ],
-                ),
+                  if (testimony.ai.entities.persons.isNotEmpty) ...[
+                    const SizedBox(height: 16),
+                    Text(
+                      'People mentioned:',
+                      style: GoogleFonts.dmSans(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: AppColours.textMuted,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      children: testimony.ai.entities.persons
+                          .map(_buildEntityChip)
+                          .toList(),
+                    ),
+                  ],
+                  if (testimony.ai.entities.dates.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      'Dates mentioned:',
+                      style: GoogleFonts.dmSans(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: AppColours.textMuted,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      children: testimony.ai.entities.dates
+                          .map(_buildEntityChip)
+                          .toList(),
+                    ),
+                  ],
+                  if (testimony.ai.entities.locations.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      'Locations:',
+                      style: GoogleFonts.dmSans(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: AppColours.textMuted,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      children: testimony.ai.entities.locations
+                          .map(_buildEntityChip)
+                          .toList(),
+                    ),
+                  ],
+                ],
               ),
             ),
           ),
 
-          // Blockchain Record section
+          // ── Blockchain Record ──────────────────────────────────────────
           SliverToBoxAdapter(
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(24, 4, 24, 0),
+              padding: const EdgeInsets.fromLTRB(24, 28, 24, 0),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -553,13 +760,11 @@ class _TestimonyDetailScreenState extends ConsumerState<TestimonyDetailScreen>
                     )
                   else ...[
                     _buildTxRow(
-                      context,
                       label: 'Arweave',
                       fullValue: testimony.arweave.txId,
                     ),
                     const SizedBox(height: 8),
                     _buildTxRow(
-                      context,
                       label: 'Polygon',
                       fullValue: testimony.blockchain.polygonTxHash,
                     ),
@@ -569,7 +774,7 @@ class _TestimonyDetailScreenState extends ConsumerState<TestimonyDetailScreen>
             ),
           ),
 
-          // Certificate button
+          // ── Certificate button ─────────────────────────────────────────
           SliverToBoxAdapter(
             child: Padding(
               padding: const EdgeInsets.fromLTRB(24, 28, 24, 40),
@@ -613,45 +818,121 @@ class _TestimonyDetailScreenState extends ConsumerState<TestimonyDetailScreen>
       ),
     );
   }
+}
 
-  Widget _buildTxRow(BuildContext context,
-      {required String label, required String fullValue}) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      decoration: BoxDecoration(
-        color: Colors.black.withOpacity(0.05),
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Row(
+// ── Fullscreen video route ────────────────────────────────────────────────────
+// Uses raw MaterialPageRoute with transparent-background to overlay fullscreen.
+// Reuses the same VideoPlayerController — does NOT create a new one.
+class _FullscreenVideoRoute extends PageRoute<void> {
+  final VideoPlayerController videoController;
+
+  _FullscreenVideoRoute({required this.videoController})
+      : super(fullscreenDialog: false);
+
+  @override
+  bool get opaque => true;
+
+  @override
+  Color? get barrierColor => Colors.black;
+
+  @override
+  String? get barrierLabel => null;
+
+  @override
+  bool get maintainState => false;
+
+  @override
+  Duration get transitionDuration => const Duration(milliseconds: 200);
+
+  @override
+  Widget buildPage(
+    BuildContext context,
+    Animation<double> animation,
+    Animation<double> secondaryAnimation,
+  ) {
+    return _FullscreenVideoPage(controller: videoController);
+  }
+}
+
+class _FullscreenVideoPage extends StatefulWidget {
+  final VideoPlayerController controller;
+  const _FullscreenVideoPage({required this.controller});
+
+  @override
+  State<_FullscreenVideoPage> createState() => _FullscreenVideoPageState();
+}
+
+class _FullscreenVideoPageState extends State<_FullscreenVideoPage> {
+  @override
+  Widget build(BuildContext context) {
+    final ctrl = widget.controller;
+    final isPlaying = ctrl.value.isPlaying;
+
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: Stack(
         children: [
-          Text(
-            label,
-            style: GoogleFonts.dmSans(
-              fontSize: 13,
-              fontWeight: FontWeight.w600,
-              color: AppColours.textDark,
+          Center(
+            child: AspectRatio(
+              aspectRatio: ctrl.value.aspectRatio,
+              child: VideoPlayer(ctrl),
             ),
           ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Text(
-              _truncateTx(fullValue),
-              style: GoogleFonts.dmSans(
-                fontSize: 12,
-                color: AppColours.textMuted,
-              ),
-              overflow: TextOverflow.ellipsis,
+          // Close button
+          Positioned(
+            top: MediaQuery.of(context).padding.top + 8,
+            left: 8,
+            child: IconButton(
+              onPressed: () => Navigator.of(context).pop(),
+              icon: const Icon(Icons.close, color: Colors.white, size: 28),
+              padding: const EdgeInsets.all(12),
+              constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
             ),
           ),
-          GestureDetector(
-            onTap: () => _copyToClipboard(context, fullValue, label),
-            child: const Padding(
-              padding: EdgeInsets.only(left: 8),
-              child: Icon(
-                Icons.copy_outlined,
-                size: 16,
-                color: AppColours.textMuted,
+          // Play/pause
+          Center(
+            child: GestureDetector(
+              onTap: () {
+                if (isPlaying) {
+                  ctrl.pause();
+                } else {
+                  ctrl.play();
+                }
+                setState(() {});
+              },
+              child: AnimatedOpacity(
+                opacity: isPlaying ? 0.0 : 1.0,
+                duration: const Duration(milliseconds: 200),
+                child: Container(
+                  width: 72,
+                  height: 72,
+                  decoration: const BoxDecoration(
+                    color: Colors.black45,
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.play_circle_outline,
+                    color: Colors.white,
+                    size: 52,
+                  ),
+                ),
               ),
+            ),
+          ),
+          // Progress bar
+          Positioned(
+            bottom: MediaQuery.of(context).padding.bottom + 16,
+            left: 16,
+            right: 16,
+            child: VideoProgressIndicator(
+              ctrl,
+              allowScrubbing: true,
+              colors: VideoProgressColors(
+                playedColor: AppColours.accentTeal,
+                bufferedColor: Colors.white30,
+                backgroundColor: Colors.white12,
+              ),
+              padding: EdgeInsets.zero,
             ),
           ),
         ],

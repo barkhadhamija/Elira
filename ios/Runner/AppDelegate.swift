@@ -9,13 +9,20 @@ import FirebaseAuth
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
+    // Firebase MUST be configured before GeneratedPluginRegistrant so that
+    // firebase_auth can register its method channel handlers correctly.
+    FirebaseApp.configure()
     GeneratedPluginRegistrant.register(with: self)
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
 
-  // Forward deep-link callbacks to Firebase Auth (needed for phone OTP reCAPTCHA flow).
-  // Without this, the reCAPTCHA verification URL lands in go_router as an unknown
-  // route and shows "Page Not Found" instead of continuing sign-in.
+  // CRITICAL: Forward custom-scheme URLs to Firebase Auth.
+  // When APNs is not configured, Firebase uses a reCAPTCHA web flow that
+  // redirects back via the URL scheme:
+  //   app-1-796311176657-ios-7ec6c28264588e189a0cf0://<callback>
+  // Firebase Auth intercepts this here. Without this, the URL hits
+  // Flutter's go_router which shows "Page Not Found" and discards it,
+  // causing the app to fall back to the phone number screen.
   override func application(
     _ app: UIApplication,
     open url: URL,
@@ -27,7 +34,7 @@ import FirebaseAuth
     return super.application(app, open: url, options: options)
   }
 
-  // Required for Universal Links / custom-scheme callbacks on iOS 9+
+  // Required for Universal Links / NSUserActivity on iOS 9+
   override func application(
     _ application: UIApplication,
     continue userActivity: NSUserActivity,

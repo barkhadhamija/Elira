@@ -44,15 +44,15 @@ class TestimonyCard extends StatelessWidget {
   IconData _typeIcon(String type) {
     switch (type) {
       case 'video':
-        return Icons.videocam_outlined;
+        return Icons.videocam_rounded;
       case 'audio':
-        return Icons.mic_outlined;
+        return Icons.mic_rounded;
       case 'image':
-        return Icons.image_outlined;
+        return Icons.image_rounded;
       case 'document':
-        return Icons.description_outlined;
+        return Icons.description_rounded;
       default:
-        return Icons.attach_file_outlined;
+        return Icons.attach_file_rounded;
     }
   }
 
@@ -67,36 +67,39 @@ class TestimonyCard extends StatelessWidget {
     return GestureDetector(
       onTap: () => context.go('/testimony/${testimony.evidenceId}'),
       child: Container(
-        constraints: const BoxConstraints(minHeight: 72),
-        margin: const EdgeInsets.only(bottom: 12),
-        padding: const EdgeInsets.all(16),
+        constraints: const BoxConstraints(minHeight: 76),
+        margin: const EdgeInsets.only(bottom: 10),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         decoration: BoxDecoration(
-          color: AppColours.cardBackground,
-          borderRadius: BorderRadius.circular(12),
-          boxShadow: const [
+          color: AppColours.cardSurface,
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [
             BoxShadow(
-              color: Colors.black12,
-              blurRadius: 8,
-              offset: Offset(0, 2),
+              color: Colors.black.withOpacity(0.05),
+              blurRadius: 12,
+              offset: const Offset(0, 3),
             ),
           ],
         ),
         child: Row(
           children: [
+            // ── Type icon ───────────────────────────────────────────────────
             Container(
-              width: 44,
-              height: 44,
+              width: 42,
+              height: 42,
               decoration: BoxDecoration(
-                color: AppColours.accentTeal.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(10),
+                color: AppColours.accentLavenderSoft,
+                borderRadius: BorderRadius.circular(11),
               ),
               child: Icon(
                 _typeIcon(testimony.type),
-                color: AppColours.accentTeal,
-                size: 22,
+                color: AppColours.brandBlue,
+                size: 20,
               ),
             ),
             const SizedBox(width: 14),
+
+            // ── Title + metadata ────────────────────────────────────────────
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -105,16 +108,17 @@ class TestimonyCard extends StatelessWidget {
                     testimony.title,
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
-                    style: GoogleFonts.dmSans(
-                      fontSize: 15,
+                    style: GoogleFonts.inter(
+                      fontSize: 14,
                       fontWeight: FontWeight.w600,
                       color: AppColours.textDark,
+                      height: 1.3,
                     ),
                   ),
-                  const SizedBox(height: 4),
+                  const SizedBox(height: 3),
                   Text(
                     '${_formatDate(testimony.metadata.timestamp)}  ·  $subtitle',
-                    style: GoogleFonts.dmSans(
+                    style: GoogleFonts.inter(
                       fontSize: 12,
                       color: AppColours.textMuted,
                     ),
@@ -123,32 +127,35 @@ class TestimonyCard extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 12),
+
+            // ── Status badge + chevron ──────────────────────────────────────
             Column(
               crossAxisAlignment: CrossAxisAlignment.end,
               mainAxisAlignment: MainAxisAlignment.center,
+              mainAxisSize: MainAxisSize.min,
               children: [
                 Container(
                   padding:
                       const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                   decoration: BoxDecoration(
-                    color: badgeColor.withOpacity(0.12),
+                    color: badgeColor.withOpacity(0.10),
                     borderRadius: BorderRadius.circular(20),
                   ),
                   child: Text(
                     testimony.status[0].toUpperCase() +
                         testimony.status.substring(1),
-                    style: GoogleFonts.dmSans(
+                    style: GoogleFonts.inter(
                       fontSize: 11,
                       fontWeight: FontWeight.w600,
                       color: badgeColor,
                     ),
                   ),
                 ),
-                const SizedBox(height: 8),
-                const Icon(
-                  Icons.chevron_right,
-                  color: AppColours.textMuted,
-                  size: 20,
+                const SizedBox(height: 6),
+                Icon(
+                  Icons.chevron_right_rounded,
+                  color: AppColours.textMuted.withOpacity(0.5),
+                  size: 18,
                 ),
               ],
             ),

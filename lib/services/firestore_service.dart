@@ -1,147 +1,131 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+
 import '../models/testimony_model.dart';
 
 class FirestoreService {
-  static final _db = FirebaseFirestore.instance;
+  static final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  static bool _syncDisabled = false;
 
-  /// Get user document by uid
-  static Future<Map<String, dynamic>?> getUser(String uid) async {
-    try {
-      final doc = await _db.collection('users').doc(uid).get();
-      return doc.exists ? doc.data() : null;
-    } catch (e) {
-      return null;
-    }
+  static bool _isMissingDefaultDbError(Object error) {
+    if (error is! FirebaseException) return false;
+    final code = error.code.toLowerCase();
+    final message = (error.message ?? '').toLowerCase();
+    return code == 'not-found' &&
+        message.contains('database (default) does not exist');
   }
 
-  /// Get cases for a user
-  static Future<List<Map<String, dynamic>>> getCasesForUser(
-      String userId) async {
-    try {
-      final snapshot = await _db
-          .collection('cases')
-          .where('userId', isEqualTo: userId)
-          .get()
-          .timeout(const Duration(seconds: 5));
-      return snapshot.docs.map((doc) {
-        final data = doc.data();
-        data['caseId'] = doc.id;
-        return data;
-      }).toList();
-    } catch (e) {
-      return [];
-    }
-  }
+  static Future<void> saveEvidence(Map<String, dynamic> data) async {
+    if (_syncDisabled) return;
 
-  /// Get evidence for a case
-  static Future<List<TestimonyModel>> getEvidenceForCase(
-      String caseId) async {
+    final evidenceId = (data['evidenceId'] as String?)?.trim();
+    if (evidenceId == null || evidenceId.isEmpty) {
+      throw ArgumentError('evidenceId is required');
+    }
+
     try {
-      final snapshot = await _db
+      await _firestore
           .collection('evidence')
-          .where('caseId', isEqualTo: caseId)
-          .orderBy('createdAt', descending: true)
-          .get()
-          .timeout(const Duration(seconds: 5));
-
-      return snapshot.docs.map((doc) {
-        final data = doc.data();
-        final metadata = data['metadata'] as Map<String, dynamic>;
-        final arweave = data['arweave'] as Map<String, dynamic>;
-        final blockchain = data['blockchain'] as Map<String, dynamic>;
-        final encryption = data['encryption'] as Map<String, dynamic>;
-        final ai = data['ai'] as Map<String, dynamic>;
-        final entities = ai['entities'] as Map<String, dynamic>;
-        final locationData = metadata['location'];
-
-        return TestimonyModel(
-          evidenceId: doc.id,
-          caseId: data['caseId'] ?? '',
-          userId: data['userId'] ?? '',
-          type: data['type'] ?? 'video',
-          title: data['title'] ?? '',
-          arweave: ArweaveData(
-            txId: arweave['txId'] ?? '',
-            url: arweave['url'] ?? '',
-          ),
-          blockchain: BlockchainData(
-            fileHash: blockchain['fileHash'] ?? '',
-            polygonTxHash: blockchain['polygonTxHash'] ?? '',
-          ),
-          encryption: EncryptionData(
-            keyId: encryption['keyId'] ?? '',
-            status: encryption['status'] ?? 'active',
-          ),
-          metadata: MetadataModel(
-            timestamp: (metadata['timestamp'] as Timestamp?)
-                    ?.toDate()
-                    .toIso8601String() ??
-                DateTime.now().toIso8601String(),
-            location: locationData != null
-                ? LocationData(
-                    lat: (locationData['lat'] as num).toDouble(),
-                    lng: (locationData['lng'] as num).toDouble(),
-                  )
-                : null,
-            duration: metadata['duration'] as int?,
-            size: (metadata['size'] as num?)?.toInt() ?? 0,
-          ),
-          ai: AiData(
-            transcript: ai['transcript'] ?? '',
-            summary: ai['summary'] ?? '',
-            entities: EntitiesData(
-              persons: List<String>.from(entities['persons'] ?? []),
-              dates: List<String>.from(entities['dates'] ?? []),
-              locations: List<String>.from(entities['locations'] ?? []),
-            ),
-          ),
-          status: data['status'] ?? 'uploading',
-          createdAt: (data['createdAt'] as Timestamp?)
-                  ?.toDate()
-                  .toIso8601String() ??
-              DateTime.now().toIso8601String(),
-        );
-      }).toList();
-    } catch (e) {
-      return [];
+          .doc(evidenceId)
+          .set(data, SetOptions(merge: true));
+    } catch (error) {
+      if (_isMissingDefaultDbError(error)) {
+        _syncDisabled = true;
+        return;
+      }
+      rethrow;
     }
   }
 
-  /// Save new evidence document
-  static Future<String?> saveEvidence(Map<String, dynamic> data) async {
+  static Future<List<TestimonyModel>> getEvidenceByUser(String userId) async {
+    if (_syncDisabled) return <TestimonyModel>[];
+
+    final safeUserId = userId.trim();
+    if (safeUserId.isEmpty) return <TestimonyModel>[];
+
+    QuerySnapshot<Map<String, dynamic>> snapshot;
     try {
-      final doc = await _db.collection('evidence').add({
-        ...data,
-        'createdAt': FieldValue.serverTimestamp(),
-        'metadata': {
-          ...data['metadata'],
-          'timestamp': FieldValue.serverTimestamp(),
-        },
-      });
-      return doc.id;
-    } catch (e) {
+      snapshot = await _firestore
+          .collection('evidence')
+          .where('userId', isEqualTo: safeUserId)
+          .get();
+    } catch (error) {
+      if (_isMissingDefaultDbError(error)) {
+        _syncDisabled = true;
+        return <TestimonyModel>[];
+      }
+      rethrow;
+    }
+
+    final items = snapshot.docs
+        .map((doc) => _fromFirestore(doc.data()))
+        .whereType<TestimonyModel>()
+        .toList();
+
+    items.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    return items;
+  }
+
+  static TestimonyModel? _fromFirestore(Map<String, dynamic> data) {
+    try {
+      final arweave = (data['arweave'] as Map<String, dynamic>? ?? {});
+      final blockchain = (data['blockchain'] as Map<String, dynamic>? ?? {});
+      final encryption = (data['encryption'] as Map<String, dynamic>? ?? {});
+      final metadata = (data['metadata'] as Map<String, dynamic>? ?? {});
+      final ai = (data['ai'] as Map<String, dynamic>? ?? {});
+      final entities = (ai['entities'] as Map<String, dynamic>? ?? {});
+      final location = (metadata['location'] as Map<String, dynamic>?);
+
+      return TestimonyModel(
+        evidenceId: (data['evidenceId'] ?? '').toString(),
+        caseId: (data['caseId'] ?? '').toString(),
+        userId: (data['userId'] ?? '').toString(),
+        type: (data['type'] ?? 'document').toString(),
+        title: (data['title'] ?? 'Untitled').toString(),
+        arweave: ArweaveData(
+          txId: (arweave['txId'] ?? '').toString(),
+          url: (arweave['url'] ?? '').toString(),
+        ),
+        blockchain: BlockchainData(
+          fileHash: (blockchain['fileHash'] ?? '').toString(),
+          polygonTxHash: (blockchain['polygonTxHash'] ?? '').toString(),
+        ),
+        encryption: EncryptionData(
+          keyId: (encryption['keyId'] ?? '').toString(),
+          status: (encryption['status'] ?? '').toString(),
+          keyHex: (encryption['keyHex'] ?? data['keyHex'] ?? '').toString(),
+          ivHex: (encryption['ivHex'] ?? data['ivHex'] ?? '').toString(),
+        ),
+        metadata: MetadataModel(
+          timestamp: (metadata['timestamp'] ?? '').toString(),
+          location: location == null
+              ? null
+              : LocationData(
+                  lat: (location['lat'] as num?)?.toDouble() ?? 0,
+                  lng: (location['lng'] as num?)?.toDouble() ?? 0,
+                ),
+          duration: (metadata['duration'] as num?)?.toInt(),
+          size: (metadata['size'] as num?)?.toInt() ?? 0,
+        ),
+        ai: AiData(
+          transcript: (ai['transcript'] ?? '').toString(),
+          summary: (ai['summary'] ?? '').toString(),
+          entities: EntitiesData(
+            persons: (entities['persons'] as List<dynamic>? ?? [])
+                .map((e) => e.toString())
+                .toList(),
+            dates: (entities['dates'] as List<dynamic>? ?? [])
+                .map((e) => e.toString())
+                .toList(),
+            locations: (entities['locations'] as List<dynamic>? ?? [])
+                .map((e) => e.toString())
+                .toList(),
+          ),
+        ),
+        status: (data['status'] ?? 'uploading').toString(),
+        createdAt: (data['createdAt'] ?? '').toString(),
+      );
+    } catch (_) {
       return null;
-    }
-  }
-
-  /// Log SOS trigger — fail silently since the 112 call is more important
-  static Future<void> logSos({
-    required String userId,
-    required String caseId,
-    required List<String> contactsNotified,
-    double? lat,
-    double? lng,
-  }) async {
-    try {
-      await _db.collection('sos_logs').add({
-        'userId': userId,
-        'caseId': caseId,
-        'location': lat != null ? {'lat': lat, 'lng': lng} : null,
-        'contactsNotified': contactsNotified,
-        'triggeredAt': FieldValue.serverTimestamp(),
-      });
-    } catch (e) {
-      // fail silently — SOS call is more important than logging
     }
   }
 }

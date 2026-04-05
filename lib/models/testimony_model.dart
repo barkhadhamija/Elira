@@ -80,7 +80,15 @@ class BlockchainData {
 class EncryptionData {
   final String keyId;
   final String status;
-  EncryptionData({required this.keyId, required this.status});
+  final String keyHex;
+  final String ivHex;
+
+  EncryptionData({
+    required this.keyId,
+    required this.status,
+    this.keyHex = '',
+    this.ivHex = '',
+  });
 }
 
 class MetadataModel {
@@ -106,11 +114,17 @@ class LocationData {
 class AiData {
   final String transcript;
   final String summary;
+  final String sentiment;
+  final String riskLevel;
+  final List<String> keywords;
   final EntitiesData entities;
 
   AiData({
     required this.transcript,
     required this.summary,
+    required this.sentiment,
+    required this.riskLevel,
+    required this.keywords,
     required this.entities,
   });
 }
@@ -119,10 +133,14 @@ class EntitiesData {
   final List<String> persons;
   final List<String> dates;
   final List<String> locations;
+  final String? title;
+  final String? description;
 
   EntitiesData({
     required this.persons,
     required this.dates,
     required this.locations,
+    this.title,
+    this.description,
   });
 }

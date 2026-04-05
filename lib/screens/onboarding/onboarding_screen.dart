@@ -6,6 +6,7 @@ import 'package:google_fonts/google_fonts.dart';
 import '../../../main.dart' show SosModal;
 import '../../theme/app_colours.dart';
 import '../../store/app_store.dart';
+import '../../services/backend_api_service.dart';
 import '../../utils/session_manager.dart';
 import '../../utils/biometric_service.dart';
 
@@ -78,19 +79,60 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     } else {
       await SessionManager.saveBiometricEnabled(false);
       if (!mounted) return;
+      await _syncProfileToBackend(biometricEnabled: false);
+      if (!mounted) return;
       context.go('/home');
     }
   }
 
   Future<void> _completeBiometricStep() async {
     await SessionManager.saveBiometricEnabled(_biometricEnabled);
+    try {
+      await _syncProfileToBackend(biometricEnabled: _biometricEnabled);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Could not save setup to backend: $e'),
+            backgroundColor: AppColours.dangerRed,
+          ),
+        );
+      }
+      return;
+    }
     if (!mounted) return;
     context.go('/home');
   }
 
+  Future<void> _syncProfileToBackend({required bool biometricEnabled}) async {
+    final userId = await SessionManager.getUserId();
+    final phone = await SessionManager.getUserPhone();
+    final email = await SessionManager.getUserEmail();
+    final name = await SessionManager.getUserName();
+    final contacts = await SessionManager.getContacts();
+    final gpsConsent = await SessionManager.getGpsConsent();
+    final pin = await SessionManager.getPin();
+
+    if (userId == null || userId.trim().isEmpty) {
+      throw Exception('Missing user id');
+    }
+
+    await BackendApiService.upsertUserProfile(
+      userId: userId,
+      name: name,
+      email: email,
+      phone: phone,
+      gpsConsent: gpsConsent,
+      contacts: contacts,
+      biometricEnabled: biometricEnabled,
+      onboardingComplete: true,
+      pin: pin,
+    );
+  }
+
   void _appendPinDigit(String digit) {
     final current = _confirmingPin ? _confirmPin : _newPin;
-    if (current.length >= 4) return;
+    if (current.length >= 6) return;
     final next = current + digit;
     setState(() {
       _pinError = '';
@@ -100,7 +142,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
         _confirmPin = next;
       }
     });
-    if (next.length == 4) {
+    if (next.length == 6) {
       if (!_confirmingPin) {
         setState(() {
           _confirmingPin = true;
@@ -113,7 +155,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
           _saveAndFinish();
         } else {
           setState(() {
-            _pinError = "PINs don't match — try again";
+            _pinError = "OTPs don't match — try again";
             _confirmingPin = false;
             _newPin = '';
             _confirmPin = '';
@@ -139,16 +181,26 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
   KeyEventResult _handlePinKey(FocusNode node, KeyEvent event) {
     if (event is! KeyDownEvent) return KeyEventResult.ignored;
     final digitKeys = {
-      LogicalKeyboardKey.digit0: '0', LogicalKeyboardKey.digit1: '1',
-      LogicalKeyboardKey.digit2: '2', LogicalKeyboardKey.digit3: '3',
-      LogicalKeyboardKey.digit4: '4', LogicalKeyboardKey.digit5: '5',
-      LogicalKeyboardKey.digit6: '6', LogicalKeyboardKey.digit7: '7',
-      LogicalKeyboardKey.digit8: '8', LogicalKeyboardKey.digit9: '9',
-      LogicalKeyboardKey.numpad0: '0', LogicalKeyboardKey.numpad1: '1',
-      LogicalKeyboardKey.numpad2: '2', LogicalKeyboardKey.numpad3: '3',
-      LogicalKeyboardKey.numpad4: '4', LogicalKeyboardKey.numpad5: '5',
-      LogicalKeyboardKey.numpad6: '6', LogicalKeyboardKey.numpad7: '7',
-      LogicalKeyboardKey.numpad8: '8', LogicalKeyboardKey.numpad9: '9',
+      LogicalKeyboardKey.digit0: '0',
+      LogicalKeyboardKey.digit1: '1',
+      LogicalKeyboardKey.digit2: '2',
+      LogicalKeyboardKey.digit3: '3',
+      LogicalKeyboardKey.digit4: '4',
+      LogicalKeyboardKey.digit5: '5',
+      LogicalKeyboardKey.digit6: '6',
+      LogicalKeyboardKey.digit7: '7',
+      LogicalKeyboardKey.digit8: '8',
+      LogicalKeyboardKey.digit9: '9',
+      LogicalKeyboardKey.numpad0: '0',
+      LogicalKeyboardKey.numpad1: '1',
+      LogicalKeyboardKey.numpad2: '2',
+      LogicalKeyboardKey.numpad3: '3',
+      LogicalKeyboardKey.numpad4: '4',
+      LogicalKeyboardKey.numpad5: '5',
+      LogicalKeyboardKey.numpad6: '6',
+      LogicalKeyboardKey.numpad7: '7',
+      LogicalKeyboardKey.numpad8: '8',
+      LogicalKeyboardKey.numpad9: '9',
     };
     if (digitKeys.containsKey(event.logicalKey)) {
       _appendPinDigit(digitKeys[event.logicalKey]!);
@@ -185,12 +237,12 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
         child: _step == 4
             ? _buildBiometricStep()
             : _step == 3
-                ? _buildPinStep()
-                : _step == 2
-                    ? _buildContactsStep()
-                    : _step == 1
-                        ? _buildDataConsentStep()
-                        : _buildLocationStep(),
+            ? _buildPinStep()
+            : _step == 2
+            ? _buildContactsStep()
+            : _step == 1
+            ? _buildDataConsentStep()
+            : _buildLocationStep(),
       ),
     );
   }
@@ -204,8 +256,11 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
         children: [
           Row(
             children: [
-              Icon(Icons.account_balance_outlined,
-                  color: AppColours.brandBlue, size: 20),
+              Icon(
+                Icons.account_balance_outlined,
+                color: AppColours.brandBlue,
+                size: 20,
+              ),
               const SizedBox(width: 6),
               Text(
                 'ELIRA',
@@ -264,8 +319,11 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                         child: Column(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            const Icon(Icons.map_outlined,
-                                color: Color(0xFF5C6BC0), size: 40),
+                            const Icon(
+                              Icons.map_outlined,
+                              color: Color(0xFF5C6BC0),
+                              size: 40,
+                            ),
                             const SizedBox(height: 4),
                             Text(
                               'GPS Map',
@@ -282,14 +340,20 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                       Positioned(
                         left: 52,
                         top: 30,
-                        child: const Icon(Icons.location_on,
-                            color: AppColours.dangerRed, size: 24),
+                        child: Icon(
+                          Icons.location_on,
+                          color: AppColours.dangerRed,
+                          size: 24,
+                        ),
                       ),
                       Positioned(
                         right: 60,
                         top: 48,
-                        child: const Icon(Icons.location_on,
-                            color: AppColours.brandBlue, size: 20),
+                        child: Icon(
+                          Icons.location_on,
+                          color: AppColours.brandBlue,
+                          size: 20,
+                        ),
                       ),
                       // Phone card
                       Positioned(
@@ -302,8 +366,11 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                             color: Colors.black87,
                             borderRadius: BorderRadius.circular(12),
                           ),
-                          child: const Icon(Icons.smartphone,
-                              color: Colors.white70, size: 36),
+                          child: const Icon(
+                            Icons.smartphone,
+                            color: Colors.white70,
+                            size: 36,
+                          ),
                         ),
                       ),
                     ],
@@ -336,7 +403,9 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                 // Toggle card
                 Container(
                   padding: const EdgeInsets.symmetric(
-                      horizontal: 20, vertical: 16),
+                    horizontal: 20,
+                    vertical: 16,
+                  ),
                   decoration: BoxDecoration(
                     color: AppColours.cardBackground,
                     borderRadius: BorderRadius.circular(16),
@@ -382,8 +451,11 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Icon(Icons.lock_outline,
-                        size: 14, color: AppColours.textMuted),
+                    Icon(
+                      Icons.lock_outline,
+                      size: 14,
+                      color: AppColours.textMuted,
+                    ),
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
@@ -432,7 +504,9 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                 // Badge
                 Container(
                   padding: const EdgeInsets.symmetric(
-                      horizontal: 10, vertical: 4),
+                    horizontal: 10,
+                    vertical: 4,
+                  ),
                   decoration: BoxDecoration(
                     color: AppColours.accentLavenderSoft,
                     borderRadius: BorderRadius.circular(6),
@@ -490,12 +564,17 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                               color: AppColours.accentLavenderSoft,
                               borderRadius: BorderRadius.circular(10),
                             ),
-                            child: const Icon(Icons.cloud_upload_outlined,
-                                color: AppColours.brandBlue, size: 18),
+                            child: Icon(
+                              Icons.cloud_upload_outlined,
+                              color: AppColours.brandBlue,
+                              size: 18,
+                            ),
                           ),
                           Container(
                             padding: const EdgeInsets.symmetric(
-                                horizontal: 8, vertical: 3),
+                              horizontal: 8,
+                              vertical: 3,
+                            ),
                             decoration: BoxDecoration(
                               color: const Color(0xFFE8E8EE),
                               borderRadius: BorderRadius.circular(6),
@@ -536,7 +615,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                           Container(
                             width: 8,
                             height: 8,
-                            decoration: const BoxDecoration(
+                            decoration: BoxDecoration(
                               color: AppColours.badgeGreen,
                               shape: BoxShape.circle,
                             ),
@@ -576,8 +655,11 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                           color: const Color(0xFFF0F0F5),
                           borderRadius: BorderRadius.circular(10),
                         ),
-                        child: const Icon(Icons.hub_outlined,
-                            color: Color(0xFF8B5CF6), size: 18),
+                        child: const Icon(
+                          Icons.hub_outlined,
+                          color: Color(0xFF8B5CF6),
+                          size: 18,
+                        ),
                       ),
                       const SizedBox(height: 12),
                       Text(
@@ -614,8 +696,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
 
                 // Consent checkbox
                 GestureDetector(
-                  onTap: () =>
-                      setState(() => _dataConsent = !_dataConsent),
+                  onTap: () => setState(() => _dataConsent = !_dataConsent),
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -635,8 +716,11 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                           borderRadius: BorderRadius.circular(5),
                         ),
                         child: _dataConsent
-                            ? const Icon(Icons.check,
-                                color: Colors.white, size: 14)
+                            ? const Icon(
+                                Icons.check,
+                                color: Colors.white,
+                                size: 14,
+                              )
                             : null,
                       ),
                       const SizedBox(width: 12),
@@ -697,8 +781,11 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                       color: const Color(0xFFFFECEC),
                       shape: BoxShape.circle,
                     ),
-                    child: const Icon(Icons.shield_outlined,
-                        color: AppColours.dangerRed, size: 26),
+                    child: Icon(
+                      Icons.shield_outlined,
+                      color: AppColours.dangerRed,
+                      size: 26,
+                    ),
                   ),
                 ),
                 const SizedBox(height: 16),
@@ -743,7 +830,9 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                           children: [
                             Container(
                               padding: const EdgeInsets.symmetric(
-                                  horizontal: 10, vertical: 4),
+                                horizontal: 10,
+                                vertical: 4,
+                              ),
                               decoration: BoxDecoration(
                                 color: isPrimary[i]
                                     ? AppColours.accentLavenderSoft
@@ -785,13 +874,17 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                         TextField(
                           controller: _contacts[i]['name'],
                           style: GoogleFonts.inter(
-                              color: AppColours.textDark, fontSize: 14),
+                            color: AppColours.textDark,
+                            fontSize: 14,
+                          ),
                           decoration: InputDecoration(
                             hintText: i == 0
                                 ? 'e.g. Aarav Sharma'
                                 : 'Optional Name',
                             hintStyle: GoogleFonts.inter(
-                                color: AppColours.textMuted, fontSize: 14),
+                              color: AppColours.textMuted,
+                              fontSize: 14,
+                            ),
                             filled: true,
                             fillColor: AppColours.inputFill,
                             border: OutlineInputBorder(
@@ -799,7 +892,9 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                               borderSide: BorderSide.none,
                             ),
                             contentPadding: const EdgeInsets.symmetric(
-                                horizontal: 14, vertical: 12),
+                              horizontal: 14,
+                              vertical: 12,
+                            ),
                           ),
                         ),
                         const SizedBox(height: 10),
@@ -817,11 +912,15 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                           controller: _contacts[i]['phone'],
                           keyboardType: TextInputType.phone,
                           style: GoogleFonts.inter(
-                              color: AppColours.textDark, fontSize: 14),
+                            color: AppColours.textDark,
+                            fontSize: 14,
+                          ),
                           decoration: InputDecoration(
                             hintText: '+91 98765 43210',
                             hintStyle: GoogleFonts.inter(
-                                color: AppColours.textMuted, fontSize: 14),
+                              color: AppColours.textMuted,
+                              fontSize: 14,
+                            ),
                             filled: true,
                             fillColor: AppColours.inputFill,
                             border: OutlineInputBorder(
@@ -829,7 +928,9 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                               borderSide: BorderSide.none,
                             ),
                             contentPadding: const EdgeInsets.symmetric(
-                                horizontal: 14, vertical: 12),
+                              horizontal: 14,
+                              vertical: 12,
+                            ),
                           ),
                         ),
                       ],
@@ -845,13 +946,17 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                     color: AppColours.accentLavenderSoft,
                     borderRadius: BorderRadius.circular(14),
                     border: Border.all(
-                        color: AppColours.brandBlue.withOpacity(0.15)),
+                      color: AppColours.brandBlue.withOpacity(0.15),
+                    ),
                   ),
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Icon(Icons.lock_outline,
-                          color: AppColours.brandBlue, size: 16),
+                      Icon(
+                        Icons.lock_outline,
+                        color: AppColours.brandBlue,
+                        size: 16,
+                      ),
                       const SizedBox(width: 10),
                       Expanded(
                         child: Column(
@@ -917,8 +1022,11 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                   padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
                   child: Row(
                     children: [
-                      Icon(Icons.location_on_outlined,
-                          color: AppColours.brandBlue, size: 20),
+                      Icon(
+                        Icons.location_on_outlined,
+                        color: AppColours.brandBlue,
+                        size: 20,
+                      ),
                       const SizedBox(width: 6),
                       Text(
                         'ELIRA',
@@ -982,8 +1090,9 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                             return Container(
                               width: 18,
                               height: 18,
-                              margin:
-                                  const EdgeInsets.symmetric(horizontal: 10),
+                              margin: const EdgeInsets.symmetric(
+                                horizontal: 10,
+                              ),
                               decoration: BoxDecoration(
                                 shape: BoxShape.circle,
                                 color: filled
@@ -1006,7 +1115,9 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                         // FaceID toggle
                         Container(
                           padding: const EdgeInsets.symmetric(
-                              horizontal: 20, vertical: 14),
+                            horizontal: 20,
+                            vertical: 14,
+                          ),
                           decoration: BoxDecoration(
                             color: AppColours.cardBackground,
                             borderRadius: BorderRadius.circular(14),
@@ -1014,8 +1125,11 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                           ),
                           child: Row(
                             children: [
-                              const Icon(Icons.face_outlined,
-                                  color: AppColours.brandBlue, size: 20),
+                              Icon(
+                                Icons.face_outlined,
+                                color: AppColours.brandBlue,
+                                size: 20,
+                              ),
                               const SizedBox(width: 12),
                               Expanded(
                                 child: Column(
@@ -1068,8 +1182,8 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                                 : null,
                             style: ElevatedButton.styleFrom(
                               backgroundColor: AppColours.brandBlue,
-                              disabledBackgroundColor:
-                                  AppColours.brandBlue.withOpacity(0.3),
+                              disabledBackgroundColor: AppColours.brandBlue
+                                  .withOpacity(0.3),
                             ),
                             child: Text(
                               'CONFIRM PIN',
@@ -1185,7 +1299,9 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                   child: Text(
                     'Finish setup',
                     style: GoogleFonts.inter(
-                        fontSize: 16, fontWeight: FontWeight.w600),
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                 ),
               ),
@@ -1194,6 +1310,21 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                 child: TextButton(
                   onPressed: () async {
                     await SessionManager.saveBiometricEnabled(false);
+                    try {
+                      await _syncProfileToBackend(biometricEnabled: false);
+                    } catch (e) {
+                      if (mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(
+                              'Could not save setup to backend: $e',
+                            ),
+                            backgroundColor: AppColours.dangerRed,
+                          ),
+                        );
+                      }
+                      return;
+                    }
                     if (!mounted) return;
                     context.go('/home');
                   },
@@ -1262,8 +1393,11 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                   ),
                   child: Center(
                     child: isBack
-                        ? Icon(Icons.backspace_outlined,
-                            color: AppColours.textMuted, size: 22)
+                        ? Icon(
+                            Icons.backspace_outlined,
+                            color: AppColours.textMuted,
+                            size: 22,
+                          )
                         : Text(
                             label,
                             style: GoogleFonts.inter(
@@ -1303,11 +1437,11 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
               onPressed: onPrimary,
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppColours.brandBlue,
-                disabledBackgroundColor:
-                    AppColours.brandBlue.withOpacity(0.35),
+                disabledBackgroundColor: AppColours.brandBlue.withOpacity(0.35),
                 minimumSize: const Size(double.infinity, 54),
                 shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14)),
+                  borderRadius: BorderRadius.circular(14),
+                ),
               ),
               child: Text(
                 primaryLabel,
@@ -1330,7 +1464,8 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                         side: BorderSide(color: AppColours.borderLight),
                         minimumSize: const Size(double.infinity, 50),
                         shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(14)),
+                          borderRadius: BorderRadius.circular(14),
+                        ),
                       ),
                       child: Text(
                         secondaryLabel,

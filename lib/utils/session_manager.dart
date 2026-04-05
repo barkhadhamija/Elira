@@ -8,6 +8,11 @@ class SessionManager {
   static const _keyContacts = 'sosContacts';
   static const _keyGpsConsent = 'gpsConsent';
   static const _keyBiometric = 'biometricEnabled';
+  static const _keyUserId = 'userId';
+  static const _keyUserPhone = 'userPhone';
+  static const _keyUserEmail = 'userEmail';
+  static const _keyUserName = 'userName';
+  static const _keyThemeMode = 'themeMode';
 
   static Future<void> saveSession() async {
     final prefs = await SharedPreferences.getInstance();
@@ -34,6 +39,11 @@ class SessionManager {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_keyLoggedIn);
     await prefs.remove(_keyExpiry);
+    await prefs.remove(_keyUserId);
+    await prefs.remove(_keyUserPhone);
+    await prefs.remove(_keyUserEmail);
+    await prefs.remove(_keyUserName);
+    await prefs.remove(_keyThemeMode);
   }
 
   /// ⚠️ DEV ONLY — wipes every key the app persists.
@@ -47,6 +57,56 @@ class SessionManager {
     await prefs.remove(_keyContacts);
     await prefs.remove(_keyGpsConsent);
     await prefs.remove(_keyBiometric);
+    await prefs.remove(_keyUserId);
+    await prefs.remove(_keyUserPhone);
+    await prefs.remove(_keyUserEmail);
+    await prefs.remove(_keyUserName);
+    await prefs.remove(_keyThemeMode);
+  }
+
+  static Future<void> saveUserProfile({
+    required String userId,
+    required String phone,
+    required String email,
+    String? name,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_keyUserId, userId);
+    await prefs.setString(_keyUserPhone, phone);
+    await prefs.setString(_keyUserEmail, email);
+    if (name != null && name.trim().isNotEmpty) {
+      await prefs.setString(_keyUserName, name.trim());
+    }
+  }
+
+  static Future<String?> getUserId() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_keyUserId);
+  }
+
+  static Future<String?> getUserPhone() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_keyUserPhone);
+  }
+
+  static Future<String?> getUserEmail() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_keyUserEmail);
+  }
+
+  static Future<String?> getUserName() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_keyUserName);
+  }
+
+  static Future<void> saveThemeMode(String themeMode) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_keyThemeMode, themeMode);
+  }
+
+  static Future<String> getThemeMode() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_keyThemeMode) ?? 'light';
   }
 
   static Future<void> setOnboardingComplete() async {

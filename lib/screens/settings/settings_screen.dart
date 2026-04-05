@@ -1,10 +1,11 @@
-import 'package:flutter/material.dart';
+ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../theme/app_colours.dart';
+import '../../theme/theme_mode_controller.dart';
 import '../../store/app_store.dart';
 import '../../utils/session_manager.dart';
 import '../../utils/biometric_service.dart';
@@ -22,6 +23,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   bool _biometricEnabled = false;
   bool _biometricAvailable = false;
   bool _gpsConsent = false;
+  bool _darkMode = false;
   bool _stealthMode = false;
   bool _loading = true;
 
@@ -35,11 +37,13 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final biometricEnabled = await SessionManager.getBiometricEnabled();
     final biometricAvailable = await BiometricService.isAvailable();
     final gpsConsent = await SessionManager.getGpsConsent();
+    final darkMode = AppThemeController.isDarkMode;
     if (!mounted) return;
     setState(() {
       _biometricEnabled = biometricEnabled;
       _biometricAvailable = biometricAvailable;
       _gpsConsent = gpsConsent;
+      _darkMode = darkMode;
       _loading = false;
     });
   }
@@ -145,6 +149,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       final prefs = await SharedPreferences.getInstance();
       await prefs.clear();
       await AuthService.signOut();
+      await AppThemeController.setMode(ThemeMode.light);
       ref.invalidate(evidenceProvider);
       ref.read(appProvider.notifier).setLoggedIn(false);
       ref.read(appProvider.notifier).setPinVerified(false);
@@ -166,8 +171,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
               child: Row(
                 children: [
-                  Icon(Icons.account_balance_outlined,
-                      color: AppColours.brandBlue, size: 20),
+                  Icon(
+                    Icons.account_balance_outlined,
+                    color: AppColours.brandBlue,
+                    size: 20,
+                  ),
                   const SizedBox(width: 6),
                   Text(
                     'ELIRA',
@@ -184,15 +192,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
             Expanded(
               child: _loading
-                  ? const Center(
+                  ? Center(
                       child: CircularProgressIndicator(
                         color: AppColours.brandBlue,
                         strokeWidth: 2,
                       ),
                     )
                   : ListView(
-                      padding:
-                          const EdgeInsets.fromLTRB(20, 20, 20, 40),
+                      padding: const EdgeInsets.fromLTRB(20, 20, 20, 40),
                       children: [
                         // ── Title ──────────────────────────────────────
                         _sectionBadge('SYSTEM CONFIGURATION'),
@@ -212,17 +219,35 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                         const SizedBox(height: 8),
                         _settingsCard([
                           _settingRow(
+                            title: 'Dark Mode',
+                            subtitle:
+                                'Use a darker interface for low-light use',
+                            trailing: Switch(
+                              value: _darkMode,
+                              onChanged: (val) async {
+                                await AppThemeController.setMode(
+                                  val ? ThemeMode.dark : ThemeMode.light,
+                                );
+                                if (mounted) {
+                                  setState(() => _darkMode = val);
+                                }
+                              },
+                            ),
+                          ),
+                          _divider(),
+                          _settingRow(
                             title: 'Biometric Authentication',
-                            subtitle: 'Secure your records with FaceID or TouchID',
+                            subtitle:
+                                'Secure your records with FaceID or TouchID',
                             trailing: Switch(
                               value: _biometricEnabled,
                               onChanged: _biometricAvailable
                                   ? (val) async {
-                                      await SessionManager
-                                          .saveBiometricEnabled(val);
+                                      await SessionManager.saveBiometricEnabled(
+                                        val,
+                                      );
                                       if (mounted) {
-                                        setState(
-                                            () => _biometricEnabled = val);
+                                        setState(() => _biometricEnabled = val);
                                       }
                                     }
                                   : null,
@@ -287,8 +312,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                                     color: const Color(0xFFBBD0FF),
                                     shape: BoxShape.circle,
                                   ),
-                                  child: const Icon(Icons.person,
-                                      color: Colors.white, size: 24),
+                                  child: Icon(
+                                    Icons.person,
+                                    color: Colors.white,
+                                    size: 24,
+                                  ),
                                 ),
                                 const SizedBox(width: 12),
                                 Expanded(
@@ -331,9 +359,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                           _divider(),
                           ListTile(
                             contentPadding: const EdgeInsets.symmetric(
-                                horizontal: 16, vertical: 4),
-                            leading: const Icon(Icons.logout_rounded,
-                                color: AppColours.dangerRed, size: 20),
+                              horizontal: 16,
+                              vertical: 4,
+                            ),
+                            leading: Icon(
+                              Icons.logout_rounded,
+                              color: AppColours.dangerRed,
+                              size: 20,
+                            ),
                             title: Text(
                               'Sign Out',
                               style: GoogleFonts.inter(
@@ -352,7 +385,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                         const SizedBox(height: 8),
                         Container(
                           padding: const EdgeInsets.symmetric(
-                              horizontal: 16, vertical: 10),
+                            horizontal: 16,
+                            vertical: 10,
+                          ),
                           decoration: BoxDecoration(
                             color: AppColours.cardBackground,
                             borderRadius: BorderRadius.circular(12),
@@ -374,7 +409,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                             color: const Color(0xFFFFF5F5),
                             borderRadius: BorderRadius.circular(16),
                             border: Border.all(
-                                color: AppColours.dangerRed.withOpacity(0.2)),
+                              color: AppColours.dangerRed.withOpacity(0.2),
+                            ),
                           ),
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
@@ -383,8 +419,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                                 onTap: _confirmClearAll,
                                 child: Row(
                                   children: [
-                                    const Icon(Icons.delete_outline,
-                                        color: AppColours.dangerRed, size: 18),
+                                    Icon(
+                                      Icons.delete_outline,
+                                      color: AppColours.dangerRed,
+                                      size: 18,
+                                    ),
                                     const SizedBox(width: 8),
                                     Text(
                                       'Clear All Data',
@@ -605,8 +644,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 ],
               ),
             ),
-            Icon(Icons.chevron_right,
-                color: AppColours.textMuted, size: 20),
+            Icon(Icons.chevron_right, color: AppColours.textMuted, size: 20),
           ],
         ),
       ),

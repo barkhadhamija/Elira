@@ -163,8 +163,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                     color: AppColours.accentLavenderSoft,
                     borderRadius: BorderRadius.circular(10),
                   ),
-                  child: const Icon(Icons.lock_outline,
-                      color: AppColours.brandBlue, size: 18),
+                      child: Icon(Icons.lock_outline,
+                        color: AppColours.brandBlue, size: 18),
                 ),
                 Text(
                   'ELIRA',
@@ -181,11 +181,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   child: Container(
                     width: 36,
                     height: 36,
-                    decoration: const BoxDecoration(
+                    decoration: BoxDecoration(
                       color: Color(0xFFBBD0FF),
                       shape: BoxShape.circle,
                     ),
-                    child: const Icon(Icons.person, color: Colors.white, size: 20),
+                    child: Icon(Icons.person, color: Colors.white, size: 20),
                   ),
                 ),
               ],
@@ -239,7 +239,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                                   color: AppColours.accentLavenderSoft,
                                   borderRadius: BorderRadius.circular(14),
                                 ),
-                                child: const Icon(Icons.mic_rounded,
+                                child: Icon(Icons.mic_rounded,
                                     color: AppColours.brandBlue, size: 24),
                               ),
                               const SizedBox(height: 14),
@@ -419,8 +419,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                               ),
                             ),
                             const SizedBox(width: 4),
-                            const Icon(Icons.arrow_forward,
-                                color: AppColours.brandBlue, size: 14),
+                            Icon(Icons.arrow_forward,
+                              color: AppColours.brandBlue, size: 14),
                           ],
                         ),
                       ),
@@ -435,7 +435,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                     Container(
                       width: 8,
                       height: 8,
-                      decoration: const BoxDecoration(
+                      decoration: BoxDecoration(
                         color: AppColours.badgeGreen,
                         shape: BoxShape.circle,
                       ),

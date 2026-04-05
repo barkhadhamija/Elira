@@ -11,6 +11,7 @@ import '../../../main.dart' show SosModal;
 import '../../theme/app_colours.dart';
 import '../../utils/session_manager.dart';
 import '../../services/auth_service.dart';
+import '../../services/backend_api_service.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -22,11 +23,59 @@ class LoginScreen extends StatefulWidget {
 class _LoginScreenState extends State<LoginScreen> {
   int _step = 1;
   final _phoneController = TextEditingController();
-  final List<TextEditingController> _otpControllers =
-      List.generate(6, (_) => TextEditingController());
-  final List<FocusNode> _otpFocusNodes =
-      List.generate(6, (_) => FocusNode());
+  final List<TextEditingController> _otpControllers = List.generate(
+    6,
+    (_) => TextEditingController(),
+  );
+  final List<FocusNode> _otpFocusNodes = List.generate(6, (_) => FocusNode());
   bool _isLoading = false;
+
+  Future<void> _ensureBackendRegistration(String fullNumber) async {
+    final digits = fullNumber.replaceAll(RegExp(r'\D'), '');
+    final last4 = digits.length >= 4
+        ? digits.substring(digits.length - 4)
+        : digits;
+    final email = 'user$digits@elira.local';
+    final name = 'Elira User $last4';
+    const password = 'elira_dev_pass_123';
+
+    try {
+      final response = await BackendApiService.registerCitizen(
+        name: name,
+        email: email,
+        password: password,
+        phone: fullNumber,
+      );
+
+      final data =
+          response['data'] as Map<String, dynamic>? ?? <String, dynamic>{};
+      final userId = (data['id'] ?? digits).toString();
+      final backendName = data['name'];
+      final resolvedName =
+          backendName is String && backendName.trim().isNotEmpty
+          ? backendName.trim()
+          : name;
+      await SessionManager.saveUserProfile(
+        userId: userId,
+        phone: fullNumber,
+        email: email,
+        name: resolvedName,
+      );
+      return;
+    } catch (e) {
+      final message = e.toString();
+      if (!message.contains('Email already registered')) {
+        rethrow;
+      }
+    }
+
+    await SessionManager.saveUserProfile(
+      userId: digits,
+      phone: fullNumber,
+      email: email,
+      name: name,
+    );
+  }
 
   @override
   void dispose() {
@@ -61,6 +110,22 @@ class _LoginScreenState extends State<LoginScreen> {
       },
       onAutoVerified: () async {
         if (!mounted) return;
+        try {
+          await _ensureBackendRegistration(fullNumber);
+        } catch (_) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(
+                  'Local backend not reachable. Start backend and try again.',
+                ),
+                backgroundColor: AppColours.dangerRed,
+              ),
+            );
+          }
+          setState(() => _isLoading = false);
+          return;
+        }
         await SessionManager.saveSession();
         if (!mounted) return;
         final onboardingDone = await SessionManager.isOnboardingComplete();
@@ -92,6 +157,22 @@ class _LoginScreenState extends State<LoginScreen> {
     if (!mounted) return;
 
     if (success) {
+      final fullNumber = '+91${_phoneController.text.trim()}';
+      try {
+        await _ensureBackendRegistration(fullNumber);
+      } catch (_) {
+        if (!mounted) return;
+        setState(() => _isLoading = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Local backend not reachable. Start backend and try again.',
+            ),
+            backgroundColor: AppColours.dangerRed,
+          ),
+        );
+        return;
+      }
       await SessionManager.saveSession();
       if (!mounted) return;
       final onboardingDone = await SessionManager.isOnboardingComplete();
@@ -105,7 +186,7 @@ class _LoginScreenState extends State<LoginScreen> {
       }
       _otpFocusNodes[0].requestFocus();
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text('Invalid OTP. Please try again.'),
           backgroundColor: AppColours.dangerRed,
         ),
@@ -128,9 +209,7 @@ class _LoginScreenState extends State<LoginScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppColours.surface,
-      body: SafeArea(
-        child: _step == 1 ? _buildStep1() : _buildStep2(),
-      ),
+      body: SafeArea(child: _step == 1 ? _buildStep1() : _buildStep2()),
     );
   }
 
@@ -146,8 +225,11 @@ class _LoginScreenState extends State<LoginScreen> {
             children: [
               Row(
                 children: [
-                  Icon(Icons.account_balance_outlined,
-                      color: AppColours.brandBlue, size: 20),
+                  Icon(
+                    Icons.account_balance_outlined,
+                    color: AppColours.brandBlue,
+                    size: 20,
+                  ),
                   const SizedBox(width: 6),
                   Text(
                     'ELIRA',
@@ -176,7 +258,9 @@ class _LoginScreenState extends State<LoginScreen> {
                 // Badge
                 Container(
                   padding: const EdgeInsets.symmetric(
-                      horizontal: 14, vertical: 6),
+                    horizontal: 14,
+                    vertical: 6,
+                  ),
                   decoration: BoxDecoration(
                     color: const Color(0xFFF0F0F0),
                     borderRadius: BorderRadius.circular(20),
@@ -246,7 +330,9 @@ class _LoginScreenState extends State<LoginScreen> {
                           children: [
                             Container(
                               padding: const EdgeInsets.symmetric(
-                                  horizontal: 16, vertical: 16),
+                                horizontal: 16,
+                                vertical: 16,
+                              ),
                               decoration: BoxDecoration(
                                 color: const Color(0xFFE8E8EC),
                                 borderRadius: const BorderRadius.only(
@@ -268,7 +354,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                 controller: _phoneController,
                                 keyboardType: TextInputType.phone,
                                 inputFormatters: [
-                                  FilteringTextInputFormatter.digitsOnly
+                                  FilteringTextInputFormatter.digitsOnly,
                                 ],
                                 maxLength: 10,
                                 style: GoogleFonts.inter(
@@ -285,7 +371,9 @@ class _LoginScreenState extends State<LoginScreen> {
                                   filled: false,
                                   border: InputBorder.none,
                                   contentPadding: const EdgeInsets.symmetric(
-                                      horizontal: 14, vertical: 16),
+                                    horizontal: 14,
+                                    vertical: 16,
+                                  ),
                                 ),
                               ),
                             ),
@@ -305,7 +393,8 @@ class _LoginScreenState extends State<LoginScreen> {
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppColours.brandBlue,
                       shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(14)),
+                        borderRadius: BorderRadius.circular(14),
+                      ),
                       minimumSize: const Size(double.infinity, 54),
                     ),
                     child: _isLoading
@@ -329,8 +418,11 @@ class _LoginScreenState extends State<LoginScreen> {
                                 ),
                               ),
                               const SizedBox(width: 8),
-                              const Icon(Icons.arrow_forward,
-                                  color: Colors.white, size: 18),
+                              const Icon(
+                                Icons.arrow_forward,
+                                color: Colors.white,
+                                size: 18,
+                              ),
                             ],
                           ),
                   ),
@@ -366,8 +458,11 @@ class _LoginScreenState extends State<LoginScreen> {
                           color: AppColours.accentLavenderSoft,
                           borderRadius: BorderRadius.circular(10),
                         ),
-                        child: Icon(Icons.shield_outlined,
-                            color: AppColours.brandBlue, size: 18),
+                        child: Icon(
+                          Icons.shield_outlined,
+                          color: AppColours.brandBlue,
+                          size: 18,
+                        ),
                       ),
                       const SizedBox(width: 12),
                       Expanded(
@@ -416,8 +511,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Icon(Icons.login,
-                          color: AppColours.brandBlue, size: 16),
+                      Icon(Icons.login, color: AppColours.brandBlue, size: 16),
                       const SizedBox(width: 6),
                       Text(
                         'Demo Login',
@@ -443,10 +537,7 @@ class _LoginScreenState extends State<LoginScreen> {
                 const SizedBox(height: 32),
 
                 // Footer divider + copyright
-                Container(
-                  height: 1,
-                  color: AppColours.divider,
-                ),
+                Container(height: 1, color: AppColours.divider),
                 const SizedBox(height: 12),
                 Text(
                   'ELIRA is a registered trademark of Forensic Systems Corp. © 2024',
@@ -478,8 +569,11 @@ class _LoginScreenState extends State<LoginScreen> {
             children: [
               Row(
                 children: [
-                  Icon(Icons.account_balance_outlined,
-                      color: AppColours.brandBlue, size: 20),
+                  Icon(
+                    Icons.account_balance_outlined,
+                    color: AppColours.brandBlue,
+                    size: 20,
+                  ),
                   const SizedBox(width: 6),
                   Text(
                     'ELIRA',
@@ -526,7 +620,9 @@ class _LoginScreenState extends State<LoginScreen> {
                 // Dev hint
                 Container(
                   padding: const EdgeInsets.symmetric(
-                      horizontal: 14, vertical: 6),
+                    horizontal: 14,
+                    vertical: 6,
+                  ),
                   decoration: BoxDecoration(
                     color: Colors.amber.withOpacity(0.12),
                     borderRadius: BorderRadius.circular(8),
@@ -556,7 +652,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         maxLength: 1,
                         textAlign: TextAlign.center,
                         inputFormatters: [
-                          FilteringTextInputFormatter.digitsOnly
+                          FilteringTextInputFormatter.digitsOnly,
                         ],
                         style: GoogleFonts.inter(
                           fontSize: 22,
@@ -578,7 +674,7 @@ class _LoginScreenState extends State<LoginScreen> {
                           ),
                           focusedBorder: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(12),
-                            borderSide: const BorderSide(
+                            borderSide: BorderSide(
                               color: AppColours.brandBlue,
                               width: 2,
                             ),
@@ -591,8 +687,7 @@ class _LoginScreenState extends State<LoginScreen> {
                 ),
                 const SizedBox(height: 40),
                 if (_isLoading)
-                  const CircularProgressIndicator(
-                      color: AppColours.brandBlue),
+                  CircularProgressIndicator(color: AppColours.brandBlue),
                 const SizedBox(height: 16),
                 TextButton(
                   onPressed: () => setState(() {

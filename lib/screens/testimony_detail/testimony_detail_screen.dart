@@ -5,12 +5,14 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 import 'package:video_player/video_player.dart';
 
 import '../../theme/app_colours.dart';
 import '../../store/app_store.dart';
-import '../../data/mock_data.dart';
 import '../../models/testimony_model.dart';
+import '../../services/testimony_retrieval_service.dart';
 
 class TestimonyDetailScreen extends ConsumerStatefulWidget {
   final String evidenceId;
@@ -30,6 +32,11 @@ class _TestimonyDetailScreenState extends ConsumerState<TestimonyDetailScreen>
   // ── Video playback ───────────────────────────────────────────────────────
   VideoPlayerController? _videoController;
   bool _videoInitialized = false;
+
+  // ── Arweave retrieval ────────────────────────────────────────────────────
+  bool _isLoadingFromArweave = false;
+  String? _arweaveError;
+  bool _isDownloadingFile = false;
 
   @override
   void initState() {
@@ -59,12 +66,22 @@ class _TestimonyDetailScreenState extends ConsumerState<TestimonyDetailScreen>
     final testimony = _findTestimony();
     if (testimony == null) return;
 
-    // Only initialise for locally recorded entries that still exist on disk
+    // Try local file first
     final filePath = testimony.localFilePath;
-    if (filePath == null || !File(filePath).existsSync()) return;
+    if (filePath != null && File(filePath).existsSync()) {
+      _initLocalVideo(filePath, testimony.metadata.duration ?? 0);
+      return;
+    }
 
-    final expectedSecs = testimony.metadata.duration ?? 0;
+    // Try Arweave if local doesn't exist but txId is available
+    if (testimony.arweave.txId.isNotEmpty &&
+        !testimony.arweave.txId.startsWith('pending')) {
+      _loadArweaveVideo(testimony);
+      return;
+    }
+  }
 
+  Future<void> _initLocalVideo(String filePath, int expectedSecs) async {
     VideoPlayerController ctrl = VideoPlayerController.file(File(filePath));
     try {
       await ctrl.initialize();
@@ -73,9 +90,6 @@ class _TestimonyDetailScreenState extends ConsumerState<TestimonyDetailScreen>
       final reportedSecs = ctrl.value.duration.inSeconds;
       debugPrint('TestimonyDetail — expected: ${expectedSecs}s, reported: ${reportedSecs}s');
 
-      // If the reported duration is significantly less than what was recorded
-      // (more than 3 s gap) or zero, iOS has not yet flushed the moov atom —
-      // dispose and reinitialise once after a short wait.
       final bool durationUnreliable = reportedSecs == 0 ||
           (expectedSecs > 0 && (expectedSecs - reportedSecs) > 3);
 
@@ -105,12 +119,194 @@ class _TestimonyDetailScreenState extends ConsumerState<TestimonyDetailScreen>
     }
   }
 
+  /// Load video from Arweave and play it
+  Future<void> _loadArweaveVideo(TestimonyModel testimony) async {
+    if (!mounted) return;
+    setState(() {
+      _isLoadingFromArweave = true;
+      _arweaveError = null;
+    });
+
+    try {
+      debugPrint('[TestimonyDetail] Loading from Arweave: ${testimony.arweave.txId}');
+
+      if (testimony.encryption.keyHex.isEmpty || testimony.encryption.ivHex.isEmpty) {
+        throw Exception('Missing decryption keys for this testimony');
+      }
+
+      final decryptedBytes = await TestimonyRetrievalService.retrieveTestimonyFile(
+        arweaveTxId: testimony.arweave.txId,
+        keyHex: testimony.encryption.keyHex,
+        ivHex: testimony.encryption.ivHex,
+      );
+
+      if (decryptedBytes == null) {
+        throw Exception('Failed to decrypt file from Arweave');
+      }
+
+      // Create temporary file for video playback
+      final tempDir = Directory.systemTemp;
+      final tempFile = File('${tempDir.path}/testimony_${testimony.evidenceId}.mp4');
+      await tempFile.writeAsBytes(decryptedBytes);
+
+      // Initialize video player
+      final ctrl = VideoPlayerController.file(tempFile);
+      await ctrl.initialize();
+      await ctrl.seekTo(Duration.zero);
+
+      ctrl.setLooping(false);
+      ctrl.addListener(() {
+        if (mounted) setState(() {});
+      });
+
+      if (mounted) {
+        setState(() {
+          _videoController = ctrl;
+          _videoInitialized = true;
+          _isLoadingFromArweave = false;
+        });
+      }
+
+      debugPrint('[TestimonyDetail] Arweave video loaded successfully');
+    } catch (e) {
+      debugPrint('[TestimonyDetail] Arweave error: $e');
+      if (mounted) {
+        setState(() {
+          _isLoadingFromArweave = false;
+          _arweaveError = e.toString();
+        });
+      }
+    }
+  }
+
+  /// Download testimony file from Arweave and save to device
+  Future<void> _downloadTestimonyFile(TestimonyModel testimony) async {
+    if (!mounted) return;
+    setState(() => _isDownloadingFile = true);
+
+    try {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Downloading from Arweave...',
+            style: GoogleFonts.dmSans(color: Colors.white),
+          ),
+          backgroundColor: const Color(0xFF1A2A3A),
+        ),
+      );
+
+      if (testimony.encryption.keyHex.isEmpty || testimony.encryption.ivHex.isEmpty) {
+        throw Exception('Missing decryption keys for this testimony');
+      }
+
+      final decryptedBytes = await TestimonyRetrievalService.retrieveTestimonyFile(
+        arweaveTxId: testimony.arweave.txId,
+        keyHex: testimony.encryption.keyHex,
+        ivHex: testimony.encryption.ivHex,
+      );
+
+      if (decryptedBytes == null) {
+        throw Exception('Failed to download');
+      }
+
+      // Determine file extension
+      String extension = '.bin';
+      if (testimony.type == 'video') {
+        extension = '.mp4';
+      } else if (testimony.type == 'audio') {
+        extension = '.m4a';
+      } else if (testimony.type == 'pdf' || testimony.type == 'document') {
+        extension = '.pdf';
+      }
+
+      // Save to Downloads (implementation depends on platform)
+        final baseName = testimony.title.trim().isEmpty
+          ? 'evidence_${testimony.evidenceId.substring(0, testimony.evidenceId.length > 8 ? 8 : testimony.evidenceId.length)}'
+          : testimony.title.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '_');
+        final fileName = '${baseName}_download$extension';
+        final targetFile = await _writeDownloadFile(fileName, decryptedBytes);
+        debugPrint('[TestimonyDetail] Downloaded: ${targetFile.path} (${decryptedBytes.length} bytes)');
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              '✓ Saved: ${targetFile.path}',
+              style: GoogleFonts.dmSans(color: Colors.white),
+            ),
+            backgroundColor: AppColours.accentTeal,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint('[TestimonyDetail] Download error: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Download failed: $e',
+              style: GoogleFonts.dmSans(color: Colors.white),
+            ),
+            backgroundColor: AppColours.dangerRed,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isDownloadingFile = false);
+      }
+    }
+  }
+
+  Future<File> _writeDownloadFile(String fileName, List<int> bytes) async {
+    final candidates = await _downloadDirectoryCandidates();
+    Object? lastError;
+
+    for (final dir in candidates) {
+      try {
+        await dir.create(recursive: true);
+        final file = File(p.join(dir.path, fileName));
+        await file.writeAsBytes(bytes, flush: true);
+        return file;
+      } catch (e) {
+        lastError = e;
+      }
+    }
+
+    throw Exception('Unable to save file on device. Last error: $lastError');
+  }
+
+  Future<List<Directory>> _downloadDirectoryCandidates() async {
+    final dirs = <Directory>[];
+
+    if (Platform.isAndroid) {
+      dirs.add(Directory('/storage/emulated/0/Download'));
+
+      final externalDir = await getExternalStorageDirectory();
+      if (externalDir != null) {
+        dirs.add(Directory(p.join(externalDir.path, 'Download')));
+        dirs.add(externalDir);
+      }
+    }
+
+    dirs.add(await getApplicationDocumentsDirectory());
+    return dirs;
+  }
+
+  Future<void> _replayFromStart(VideoPlayerController controller) async {
+    await controller.seekTo(Duration.zero);
+    await controller.play();
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
   // ── Lookup testimony ─────────────────────────────────────────────────────
   TestimonyModel? _findTestimony() {
     final storeTestimonies = ref.read(appProvider).testimonies;
-    final all = [...storeTestimonies, ...mockTestimonies];
     try {
-      return all.firstWhere((t) => t.evidenceId == widget.evidenceId);
+      return storeTestimonies.firstWhere((t) => t.evidenceId == widget.evidenceId);
     } catch (_) {
       return null;
     }
@@ -203,6 +399,8 @@ class _TestimonyDetailScreenState extends ConsumerState<TestimonyDetailScreen>
     final isPlayable = _videoInitialized && _videoController != null;
     final ctrl = _videoController;
     final isPlaying = ctrl?.value.isPlaying ?? false;
+    final hasArweaveId = testimony.arweave.txId.isNotEmpty && 
+                         !testimony.arweave.txId.startsWith('pending');
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -213,26 +411,48 @@ class _TestimonyDetailScreenState extends ConsumerState<TestimonyDetailScreen>
             aspectRatio: 16 / 9,
             child: Stack(
               children: [
-                // ── Background / video frame ───────────────────────────
+                // ── Background ─────────────────────────────────────────
                 if (isPlayable)
                   VideoPlayer(ctrl!)
                 else
                   Container(color: const Color(0xFF1C1A2E)),
 
-                // ── Placeholder overlay for non-playable entries ───────
-                if (!isPlayable)
+                // ── Loading indicator for Arweave ──────────────────────
+                if (_isLoadingFromArweave)
                   Center(
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Icon(
-                          Icons.cloud_outlined,
+                        CircularProgressIndicator(
+                          color: AppColours.accentTeal,
+                          strokeWidth: 2.5,
+                        ),
+                        const SizedBox(height: 12),
+                        Text(
+                          'Loading from Arweave...',
+                          style: GoogleFonts.dmSans(
+                            fontSize: 13,
+                            color: Colors.white70,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                // ── Error message ──────────────────────────────────────
+                if (_arweaveError != null && !isPlayable)
+                  Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(
+                          Icons.error_outline,
                           color: Colors.white54,
                           size: 48,
                         ),
                         const SizedBox(height: 10),
                         Text(
-                          'Available after Arweave upload',
+                          'Failed to load from Arweave',
                           style: GoogleFonts.dmSans(
                             fontSize: 13,
                             color: Colors.white54,
@@ -242,14 +462,52 @@ class _TestimonyDetailScreenState extends ConsumerState<TestimonyDetailScreen>
                     ),
                   ),
 
-                // ── Play / pause button for playable entries ───────────
+                // ── Placeholder overlay ────────────────────────────────
+                if (!isPlayable && !_isLoadingFromArweave && _arweaveError == null)
+                  Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          hasArweaveId ? Icons.cloud_download_outlined : Icons.cloud_outlined,
+                          color: Colors.white54,
+                          size: 48,
+                        ),
+                        const SizedBox(height: 10),
+                        Text(
+                          hasArweaveId ? 'Tap to load from Arweave' : 'Waiting for Arweave upload...',
+                          style: GoogleFonts.dmSans(
+                            fontSize: 13,
+                            color: Colors.white54,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                // ── Load button (for Arweave videos) ───────────────────
+                if (!isPlayable && hasArweaveId && !_isLoadingFromArweave)
+                  GestureDetector(
+                    onTap: () => _loadArweaveVideo(testimony),
+                    child: Container(
+                      color: Colors.transparent,
+                    ),
+                  ),
+
+                // ── Play/Pause button ──────────────────────────────────
                 if (isPlayable)
                   GestureDetector(
-                    onTap: () {
+                    onTap: () async {
                       if (isPlaying) {
                         ctrl!.pause();
                       } else {
-                        ctrl!.play();
+                        final duration = ctrl!.value.duration;
+                        final position = ctrl.value.position;
+                        if (duration > Duration.zero &&
+                            position >= duration - const Duration(milliseconds: 300)) {
+                          await ctrl.seekTo(Duration.zero);
+                        }
+                        ctrl.play();
                       }
                       setState(() {});
                     },
@@ -274,7 +532,7 @@ class _TestimonyDetailScreenState extends ConsumerState<TestimonyDetailScreen>
                     ),
                   ),
 
-                // ── Progress bar — only for playable entries ───────────
+                // ── Progress bar ───────────────────────────────────────
                 if (isPlayable)
                   Positioned(
                     bottom: 0,
@@ -292,7 +550,7 @@ class _TestimonyDetailScreenState extends ConsumerState<TestimonyDetailScreen>
                     ),
                   ),
 
-                // ── Fullscreen button — only for playable entries ──────
+                // ── Fullscreen button ──────────────────────────────────
                 if (isPlayable)
                   Positioned(
                     bottom: 8,
@@ -318,8 +576,220 @@ class _TestimonyDetailScreenState extends ConsumerState<TestimonyDetailScreen>
                       ),
                     ),
                   ),
+
+                if (isPlayable)
+                  Positioned(
+                    top: 8,
+                    right: 8,
+                    child: GestureDetector(
+                      onTap: () => _replayFromStart(ctrl!),
+                      child: Container(
+                        width: 36,
+                        height: 36,
+                        decoration: BoxDecoration(
+                          color: Colors.black45,
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: const Icon(
+                          Icons.replay_rounded,
+                          color: Colors.white,
+                          size: 20,
+                        ),
+                      ),
+                    ),
+                  ),
+
+                // ── Download button (for documents)  ───────────────────
+                if (testimony.type != 'video' && hasArweaveId)
+                  Positioned(
+                    bottom: 8,
+                    right: 8,
+                    child: GestureDetector(
+                      onTap: () => _downloadTestimonyFile(testimony),
+                      child: Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: _isDownloadingFile ? Colors.grey : AppColours.accentTeal,
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: _isDownloadingFile
+                            ? const SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(
+                                  color: Colors.white,
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : const Icon(
+                                Icons.download_outlined,
+                                color: Colors.white,
+                                size: 18,
+                              ),
+                      ),
+                    ),
+                  ),
               ],
             ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ── Download / Documents section ─────────────────────────────────────────
+  Widget _buildDownloadSection(TestimonyModel testimony) {
+    final txId = testimony.arweave.txId;
+    final isPending = txId.isEmpty || txId.startsWith('pending');
+
+    if (isPending) {
+      return const SizedBox.shrink();
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(
+              Icons.cloud_download_outlined,
+              color: AppColours.textMuted,
+              size: 20,
+            ),
+            const SizedBox(width: 8),
+            Text(
+              'Stored on Arweave',
+              style: GoogleFonts.dmSans(
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+                color: AppColours.textMuted,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            border: Border.all(color: AppColours.accentTeal.withOpacity(0.3)),
+            borderRadius: BorderRadius.circular(8),
+            color: AppColours.accentTeal.withOpacity(0.05),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          testimony.type == 'video'
+                              ? 'Video Recording'
+                              : testimony.type == 'audio'
+                                  ? 'Audio Recording'
+                                  : 'Document',
+                          style: GoogleFonts.dmSans(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: AppColours.textDark,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'TX: ${txId.substring(0, 16)}...',
+                          style: GoogleFonts.dmSans(
+                            fontSize: 11,
+                            color: AppColours.textMuted,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  GestureDetector(
+                    onTap: () => _downloadTestimonyFile(testimony),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 8,
+                      ),
+                      decoration: BoxDecoration(
+                        color: _isDownloadingFile
+                            ? Colors.grey.shade400
+                            : AppColours.accentTeal,
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: _isDownloadingFile
+                          ? const SizedBox(
+                              width: 14,
+                              height: 14,
+                              child: CircularProgressIndicator(
+                                color: Colors.white,
+                                strokeWidth: 2,
+                              ),
+                            )
+                          : Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Icon(
+                                  Icons.download_outlined,
+                                  color: Colors.white,
+                                  size: 16,
+                                ),
+                                const SizedBox(width: 6),
+                                Text(
+                                  'Download',
+                                  style: GoogleFonts.dmSans(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                              ],
+                            ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              GestureDetector(
+                onTap: () {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(
+                        'View on Arweave: $txId',
+                        style: GoogleFonts.dmSans(fontSize: 12),
+                      ),
+                      action: SnackBarAction(
+                        label: 'Copy',
+                        onPressed: () {
+                          Clipboard.setData(ClipboardData(text: txId));
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                'TX ID copied to clipboard',
+                                style: GoogleFonts.dmSans(fontSize: 12),
+                              ),
+                              duration: const Duration(seconds: 2),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  );
+                },
+                child: Text(
+                  'View Arweave Transaction',
+                  style: GoogleFonts.dmSans(
+                    fontSize: 12,
+                    color: AppColours.accentTeal,
+                    decoration: TextDecoration.underline,
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
       ],
@@ -404,7 +874,7 @@ class _TestimonyDetailScreenState extends ConsumerState<TestimonyDetailScreen>
           ),
           GestureDetector(
             onTap: () => _copyToClipboard(fullValue),
-            child: const Padding(
+            child: Padding(
               padding: EdgeInsets.only(left: 8),
               child: Icon(
                 Icons.copy_outlined,
@@ -418,15 +888,86 @@ class _TestimonyDetailScreenState extends ConsumerState<TestimonyDetailScreen>
     );
   }
 
+  Widget _buildAiMetricCard({
+    required String label,
+    required String value,
+    required IconData icon,
+    required Color color,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColours.divider),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(icon, size: 14, color: AppColours.textMuted),
+              const SizedBox(width: 6),
+              Text(
+                label,
+                style: GoogleFonts.dmSans(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: AppColours.textMuted,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            value,
+            style: GoogleFonts.dmSans(
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+              color: color,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Color _getSentimentColor(String sentiment) {
+    switch (sentiment.toLowerCase()) {
+      case 'positive':
+        return Colors.green.shade700;
+      case 'negative':
+        return Colors.red.shade700;
+      case 'neutral':
+        return AppColours.brandBlue;
+      case 'distressed':
+        return Colors.orange.shade800;
+      default:
+        return AppColours.textDark;
+    }
+  }
+
+  Color _getRiskColor(String risk) {
+    switch (risk.toUpperCase()) {
+      case 'HIGH':
+        return Colors.red.shade800;
+      case 'MEDIUM':
+        return Colors.orange.shade700;
+      case 'LOW':
+        return Colors.green.shade700;
+      default:
+        return AppColours.textMuted;
+    }
+  }
+
   // ── Main build ────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
     // Watch so we react if new testimonies are added
     final storeTestimonies = ref.watch(appProvider).testimonies;
-    final all = [...storeTestimonies, ...mockTestimonies];
     TestimonyModel? testimony;
     try {
-      testimony = all.firstWhere((t) => t.evidenceId == widget.evidenceId);
+      testimony = storeTestimonies.firstWhere((t) => t.evidenceId == widget.evidenceId);
     } catch (_) {
       testimony = null;
     }
@@ -443,13 +984,13 @@ class _TestimonyDetailScreenState extends ConsumerState<TestimonyDetailScreen>
                   alignment: Alignment.centerLeft,
                   child: IconButton(
                     onPressed: () => context.go('/home'),
-                    icon: const Icon(Icons.arrow_back, color: AppColours.textDark),
+                    icon: Icon(Icons.arrow_back, color: AppColours.textDark),
                     padding: const EdgeInsets.all(12),
                     constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
                   ),
                 ),
               ),
-              const Expanded(
+              Expanded(
                 child: Center(
                   child: Text(
                     'Evidence not found',
@@ -491,7 +1032,7 @@ class _TestimonyDetailScreenState extends ConsumerState<TestimonyDetailScreen>
                   children: [
                     IconButton(
                       onPressed: () => context.go('/home'),
-                      icon: const Icon(Icons.arrow_back, color: AppColours.textDark),
+                      icon: Icon(Icons.arrow_back, color: AppColours.textDark),
                       iconSize: 24,
                       padding: const EdgeInsets.all(12),
                       constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
@@ -532,7 +1073,7 @@ class _TestimonyDetailScreenState extends ConsumerState<TestimonyDetailScreen>
                   const SizedBox(height: 8),
                   Row(
                     children: [
-                      const Icon(
+                      Icon(
                         Icons.location_on_outlined,
                         size: 14,
                         color: AppColours.textMuted,
@@ -564,7 +1105,17 @@ class _TestimonyDetailScreenState extends ConsumerState<TestimonyDetailScreen>
             ),
           ),
 
-          // ── AI Summary ────────────────────────────────────────────────
+          // ── Documents / Downloads section ───────────────────────────
+          if (testimony.arweave.txId.isNotEmpty && 
+              !testimony.arweave.txId.startsWith('pending'))
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(24, 20, 24, 0),
+                child: _buildDownloadSection(testimony),
+              ),
+            ),
+
+          // ── AI Analysis Section ─────────────────────────────────────────
           SliverToBoxAdapter(
             child: Padding(
               padding: const EdgeInsets.fromLTRB(24, 28, 24, 0),
@@ -574,7 +1125,7 @@ class _TestimonyDetailScreenState extends ConsumerState<TestimonyDetailScreen>
                   Row(
                     children: [
                       Text(
-                        'AI Generated Summary',
+                        'AI Evidence Analysis',
                         style: GoogleFonts.dmSans(
                           fontSize: 16,
                           fontWeight: FontWeight.w600,
@@ -600,91 +1151,117 @@ class _TestimonyDetailScreenState extends ConsumerState<TestimonyDetailScreen>
                       ),
                     ],
                   ),
-                  const SizedBox(height: 12),
-                  if (testimony.ai.summary.toLowerCase().contains('pending')) ...[
-                    Text(
-                      testimony.ai.summary,
-                      style: GoogleFonts.dmSans(
-                        fontSize: 15,
-                        color: AppColours.textMuted,
-                        fontStyle: FontStyle.italic,
-                        height: 1.6,
-                      ),
+                  const SizedBox(height: 16),
+                  
+                  // Summary Box
+                  Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: AppColours.accentLavenderSoft.withOpacity(0.5),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: AppColours.divider),
                     ),
-                    const SizedBox(height: 10),
-                    Row(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Icon(Icons.access_time,
-                            size: 14, color: AppColours.textMuted),
-                        const SizedBox(width: 6),
                         Text(
-                          'Analysis in progress',
+                          'Executive Summary',
                           style: GoogleFonts.dmSans(
                             fontSize: 12,
-                            color: AppColours.textMuted,
+                            fontWeight: FontWeight.w700,
+                            color: AppColours.brandBlue,
+                            letterSpacing: 0.5,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          testimony.ai.summary.isNotEmpty 
+                            ? testimony.ai.summary 
+                            : 'AI is analyzing this evidence...',
+                          style: GoogleFonts.dmSans(
+                            fontSize: 15,
+                            color: AppColours.textDark,
+                            height: 1.5,
                           ),
                         ),
                       ],
                     ),
-                  ] else ...[
+                  ),
+
+                  const SizedBox(height: 20),
+
+                  // Metadata Row: Sentiment & Risk
+                  Row(
+                    children: [
+                      if (testimony.ai.sentiment.isNotEmpty)
+                        Expanded(
+                          child: _buildAiMetricCard(
+                            label: 'Sentiment',
+                            value: testimony.ai.sentiment.toUpperCase(),
+                            icon: Icons.face_retouching_natural_rounded,
+                            color: _getSentimentColor(testimony.ai.sentiment),
+                          ),
+                        ),
+                      const SizedBox(width: 12),
+                      if (testimony.ai.riskLevel.isNotEmpty)
+                        Expanded(
+                          child: _buildAiMetricCard(
+                            label: 'Risk Level',
+                            value: testimony.ai.riskLevel,
+                            icon: Icons.warning_amber_rounded,
+                            color: _getRiskColor(testimony.ai.riskLevel),
+                          ),
+                        ),
+                    ],
+                  ),
+
+                  if (testimony.ai.transcript.isNotEmpty) ...[
+                    const SizedBox(height: 24),
                     Text(
-                      testimony.ai.summary,
+                      'AI Transcription',
                       style: GoogleFonts.dmSans(
-                        fontSize: 15,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
                         color: AppColours.textDark,
-                        height: 1.6,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: AppColours.divider),
+                      ),
+                      child: Text(
+                        testimony.ai.transcript,
+                        style: GoogleFonts.dmSans(
+                          fontSize: 14,
+                          color: AppColours.textMuted,
+                          height: 1.5,
+                        ),
                       ),
                     ),
                   ],
+
                   if (testimony.ai.entities.persons.isNotEmpty) ...[
-                    const SizedBox(height: 16),
+                    const SizedBox(height: 24),
                     Text(
-                      'People mentioned:',
+                      'Detected Entities',
                       style: GoogleFonts.dmSans(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                        color: AppColours.textMuted,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                        color: AppColours.textDark,
                       ),
                     ),
-                    const SizedBox(height: 8),
+                    const SizedBox(height: 10),
                     Wrap(
-                      children: testimony.ai.entities.persons
-                          .map(_buildEntityChip)
-                          .toList(),
-                    ),
-                  ],
-                  if (testimony.ai.entities.dates.isNotEmpty) ...[
-                    const SizedBox(height: 8),
-                    Text(
-                      'Dates mentioned:',
-                      style: GoogleFonts.dmSans(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                        color: AppColours.textMuted,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Wrap(
-                      children: testimony.ai.entities.dates
-                          .map(_buildEntityChip)
-                          .toList(),
-                    ),
-                  ],
-                  if (testimony.ai.entities.locations.isNotEmpty) ...[
-                    const SizedBox(height: 8),
-                    Text(
-                      'Locations:',
-                      style: GoogleFonts.dmSans(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                        color: AppColours.textMuted,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Wrap(
-                      children: testimony.ai.entities.locations
-                          .map(_buildEntityChip)
-                          .toList(),
+                      children: [
+                        ...testimony.ai.entities.persons.map((p) => _buildEntityChip('Person: $p')),
+                        ...testimony.ai.entities.dates.map((d) => _buildEntityChip('Date: $d')),
+                        ...testimony.ai.keywords.map((k) => _buildEntityChip('Tag: $k')),
+                      ],
                     ),
                   ],
                 ],
@@ -724,7 +1301,7 @@ class _TestimonyDetailScreenState extends ConsumerState<TestimonyDetailScreen>
                               child: Container(
                                 width: 10,
                                 height: 10,
-                                decoration: const BoxDecoration(
+                                decoration: BoxDecoration(
                                   color: AppColours.accentTeal,
                                   shape: BoxShape.circle,
                                 ),
@@ -759,6 +1336,11 @@ class _TestimonyDetailScreenState extends ConsumerState<TestimonyDetailScreen>
                       ),
                     )
                   else ...[
+                    _buildTxRow(
+                      label: 'Evidence',
+                      fullValue: testimony.evidenceId,
+                    ),
+                    const SizedBox(height: 8),
                     _buildTxRow(
                       label: 'Arweave',
                       fullValue: testimony.arweave.txId,

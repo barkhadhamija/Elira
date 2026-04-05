@@ -629,7 +629,7 @@ class _RecordScreenState extends ConsumerState<RecordScreen>
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    const CircularProgressIndicator(
+                    CircularProgressIndicator(
                       color: AppColours.brandBlue,
                       strokeWidth: 2,
                     ),
@@ -679,7 +679,7 @@ class _RecordScreenState extends ConsumerState<RecordScreen>
                           borderRadius: BorderRadius.circular(26),
                           border: Border.all(color: Colors.white24, width: 1.5),
                         ),
-                        child: const Icon(Icons.mic_none_rounded,
+                        child: Icon(Icons.mic_none_rounded,
                             color: Colors.white, size: 24),
                       ),
                     ),
@@ -712,7 +712,7 @@ class _RecordScreenState extends ConsumerState<RecordScreen>
               children: [
                 GestureDetector(
                   onTap: () => context.go('/home'),
-                  child: const Icon(Icons.lock_outline,
+                    child: Icon(Icons.lock_outline,
                       color: AppColours.brandBlue, size: 22),
                 ),
                 const Spacer(),
@@ -732,7 +732,7 @@ class _RecordScreenState extends ConsumerState<RecordScreen>
                   child: CircleAvatar(
                     radius: 18,
                     backgroundColor: AppColours.accentLavenderSoft,
-                    child: const Icon(Icons.person,
+                    child: Icon(Icons.person,
                         color: AppColours.brandBlue, size: 18),
                   ),
                 ),
@@ -818,7 +818,7 @@ class _RecordScreenState extends ConsumerState<RecordScreen>
             children: [
               TextButton.icon(
                 onPressed: () => context.go('/settings'),
-                icon: const Icon(Icons.mic_none_rounded,
+                icon: Icon(Icons.mic_none_rounded,
                     size: 18, color: AppColours.brandBlue),
                 label: Text(
                   'Audio Settings',
@@ -1210,7 +1210,7 @@ class _RecordScreenState extends ConsumerState<RecordScreen>
   Widget _buildLoadingPreview() {
     return Container(
       color: const Color(0xFF1C1A2E),
-      child: const Center(
+      child: Center(
         child: CircularProgressIndicator(
           color: AppColours.brandBlue,
           strokeWidth: 2,

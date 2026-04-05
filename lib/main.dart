@@ -7,14 +7,13 @@ import 'firebase_options.dart';
 import 'router.dart'; // also imports sosNavigatorKey
 import 'theme/app_theme.dart';
 import 'theme/app_colours.dart';
+import 'theme/theme_mode_controller.dart';
 import 'utils/session_manager.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
-  );
-  await SessionManager.clearAll(); // ⚠️ DEV ONLY — remove after testing
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  await AppThemeController.load();
   runApp(const ProviderScope(child: EliraApp()));
 }
 
@@ -23,23 +22,28 @@ class EliraApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp.router(
-      title: 'ELIRA',
-      debugShowCheckedModeBanner: false,
-      theme: AppTheme.theme,
-      routerConfig: router,
+    return ValueListenableBuilder<ThemeMode>(
+      valueListenable: AppThemeController.themeMode,
+      builder: (context, themeMode, _) {
+        return MaterialApp.router(
+          title: 'ELIRA',
+          debugShowCheckedModeBanner: false,
+          theme: AppTheme.theme,
+          darkTheme: AppTheme.darkTheme,
+          themeMode: themeMode,
+          routerConfig: router,
+        );
+      },
     );
   }
 }
-
-
 
 // ---------------------------------------------------------------------------
 // SosModal — countdown dialog that calls 112 and notifies saved contacts.
 // Public so record_screen.dart (and any other screen) can show it directly.
 // ---------------------------------------------------------------------------
 class SosModal extends StatefulWidget {
-  const SosModal();
+  const SosModal({super.key});
 
   @override
   State<SosModal> createState() => _SosModalState();
@@ -139,10 +143,7 @@ class _SosModalState extends State<SosModal> {
               const SizedBox(height: 24),
               Text(
                 'Notifying your contacts',
-                style: GoogleFonts.inter(
-                  color: Colors.white54,
-                  fontSize: 13,
-                ),
+                style: GoogleFonts.inter(color: Colors.white54, fontSize: 13),
               ),
               const SizedBox(height: 8),
               ..._contacts.map(
@@ -164,11 +165,12 @@ class _SosModalState extends State<SosModal> {
               onPressed: _cancel,
               style: TextButton.styleFrom(
                 padding: const EdgeInsets.symmetric(
-                    horizontal: 32, vertical: 12),
+                  horizontal: 32,
+                  vertical: 12,
+                ),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12),
-                  side: const BorderSide(
-                      color: Colors.white24, width: 1),
+                  side: const BorderSide(color: Colors.white24, width: 1),
                 ),
               ),
               child: Text(

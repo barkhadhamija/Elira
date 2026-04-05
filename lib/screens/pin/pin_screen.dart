@@ -83,13 +83,13 @@ class _PinScreenState extends ConsumerState<PinScreen>
   }
 
   Future<void> _appendDigit(String digit) async {
-    if (_pin.length >= 4) return;
+    if (_pin.length >= 6) return;
     final newPin = _pin + digit;
     setState(() {
       _pin = newPin;
       _hasError = false;
     });
-    if (newPin.length == 4) {
+    if (newPin.length == 6) {
       await _checkPin(newPin);
     }
   }
@@ -203,7 +203,7 @@ class _PinScreenState extends ConsumerState<PinScreen>
               color: AppColours.accentLavenderSoft,
               shape: BoxShape.circle,
             ),
-            child: const Icon(
+            child: Icon(
               Icons.fingerprint,
               size: 48,
               color: AppColours.brandBlue,
@@ -304,7 +304,7 @@ class _PinScreenState extends ConsumerState<PinScreen>
                       },
                       child: Row(
                         mainAxisAlignment: MainAxisAlignment.center,
-                        children: List.generate(4, (i) {
+                        children: List.generate(6, (i) {
                           final filled = i < _pin.length;
                           return Container(
                             width: 18,
@@ -347,7 +347,7 @@ class _PinScreenState extends ConsumerState<PinScreen>
                         child: Row(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            const Icon(Icons.fingerprint,
+                            Icon(Icons.fingerprint,
                                 color: AppColours.textMuted, size: 20),
                             const SizedBox(width: 8),
                             Text(
@@ -380,7 +380,7 @@ class _PinScreenState extends ConsumerState<PinScreen>
                     Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        const Icon(Icons.lock_outline,
+                        Icon(Icons.lock_outline,
                             size: 12, color: AppColours.textMuted),
                         const SizedBox(width: 4),
                         Text(

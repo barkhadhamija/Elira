@@ -28,6 +28,10 @@ dependencies:
   video_player: ^2.8.3
   geolocator: ^11.0.0
   record: ^6.0.0
+  http: ^1.2.2
+  video_compress: ^3.1.1
+  encrypt: ^5.0.3
+  pdf: ^3.11.3
 
 dev_dependencies:
   flutter_test:

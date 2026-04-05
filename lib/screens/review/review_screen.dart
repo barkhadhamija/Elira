@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -6,14 +7,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:video_player/video_player.dart';
+import 'package:video_compress/video_compress.dart';
 
 import '../../data/mock_data.dart';
 import '../../models/testimony_model.dart';
-import '../../services/arweave_service.dart';
-import '../../services/auth_service.dart';
-import '../../services/firestore_service.dart';
+import '../../services/backend_api_service.dart';
 import '../../store/app_store.dart';
 import '../../theme/app_colours.dart';
+import '../../utils/session_manager.dart';
 
 class ReviewScreen extends ConsumerStatefulWidget {
   final String filePath;
@@ -40,6 +41,8 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
   bool _videoInitialized = false;
   bool _isPlaying = false;
   bool _isSaving = false;
+  bool _isCompressing = false;
+  String? _compressionStatus;
   String? _fileSizeLabel;
   late final TextEditingController _titleController;
 
@@ -82,12 +85,15 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
 
       debugPrint('ELIRA DEBUG — Video duration: ${ctrl.value.duration}');
       debugPrint('ELIRA DEBUG — Video size: ${ctrl.value.size}');
-      debugPrint('ELIRA DEBUG — Expected duration: ${expectedSecs}s, reported: ${reportedSecs}s');
+      debugPrint(
+        'ELIRA DEBUG — Expected duration: ${expectedSecs}s, reported: ${reportedSecs}s',
+      );
 
       // If the duration read is significantly less than what we recorded
       // (more than 3 s gap) or zero, iOS has not yet flushed the full
       // moov atom — dispose and reinitialise once after a short wait.
-      final bool durationUnreliable = reportedSecs == 0 ||
+      final bool durationUnreliable =
+          reportedSecs == 0 ||
           (expectedSecs > 0 && (expectedSecs - reportedSecs) > 3);
 
       if (durationUnreliable) {
@@ -159,6 +165,69 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
     return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
   }
 
+  // ── Video compression ────────────────────────────────────────────────────
+  Future<File?> _compressVideo(String videoPath) async {
+    if (kIsWeb) {
+      // Web doesn't support video compression
+      debugPrint('ELIRA DEBUG — Skipping compression on web');
+      return null;
+    }
+
+    try {
+      debugPrint('ELIRA DEBUG — Starting video compression');
+      setState(() {
+        _isCompressing = true;
+        _compressionStatus = 'Compressing video...';
+      });
+
+      final originalSize = await File(videoPath).length();
+      final selectedQuality = originalSize > 75 * 1024 * 1024
+          ? VideoQuality.Res960x540Quality
+          : originalSize > 25 * 1024 * 1024
+          ? VideoQuality.Res640x480Quality
+          : VideoQuality.MediumQuality;
+
+      final mediaInfo = await VideoCompress.compressVideo(
+        videoPath,
+        quality: selectedQuality,
+        deleteOrigin: false,
+        includeAudio: true,
+        frameRate: 20,
+      );
+
+      if (mediaInfo != null && mediaInfo.file != null) {
+        final compressedSize = mediaInfo.file!.lengthSync();
+        if (compressedSize >= originalSize) {
+          debugPrint(
+            'ELIRA DEBUG — Compression did not reduce size; keeping original file',
+          );
+          return File(videoPath);
+        }
+
+        final ratio = ((1 - (compressedSize / originalSize)) * 100)
+            .toStringAsFixed(1);
+
+        debugPrint('ELIRA DEBUG — Compression complete');
+        debugPrint(
+          'Original: ${_formatFileSize(originalSize)} → Compressed: ${_formatFileSize(compressedSize)} ($ratio% reduction)',
+        );
+
+        return mediaInfo.file;
+      }
+    } catch (e) {
+      debugPrint('ELIRA DEBUG — Compression error: $e');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isCompressing = false;
+          _compressionStatus = null;
+        });
+      }
+    }
+
+    return null;
+  }
+
   // ── Discard flow ─────────────────────────────────────────────────────────
   Future<void> _confirmDiscard() async {
     final confirmed = await showDialog<bool>(
@@ -175,10 +244,7 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
         ),
         content: Text(
           'This cannot be undone.',
-          style: GoogleFonts.dmSans(
-            fontSize: 15,
-            color: AppColours.textMuted,
-          ),
+          style: GoogleFonts.dmSans(fontSize: 15, color: AppColours.textMuted),
         ),
         actions: [
           TextButton(
@@ -193,8 +259,9 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
             child: Text(
               'Discard',
               style: GoogleFonts.dmSans(
-                  color: AppColours.dangerRed,
-                  fontWeight: FontWeight.w700),
+                color: AppColours.dangerRed,
+                fontWeight: FontWeight.w700,
+              ),
             ),
           ),
         ],
@@ -229,41 +296,72 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
     setState(() => _isSaving = true);
 
     try {
-      // Upload stub
-      final txId = await ArweaveService.uploadFile(
-        filePath: widget.filePath,
-        mimeType: widget.mimeType,
-        title: title,
+      // Compress video if on mobile and file is large
+      String filePathToUpload = widget.filePath;
+      if (!kIsWeb && widget.mimeType.startsWith('video')) {
+        final originalSize = await File(widget.filePath).length();
+        // Compress any notable video, and get aggressive for larger files.
+        if (originalSize > 5 * 1024 * 1024) {
+          debugPrint(
+            'ELIRA DEBUG — File ${_formatFileSize(originalSize)} will be compressed before upload...',
+          );
+          final compressedFile = await _compressVideo(widget.filePath);
+          if (compressedFile != null) {
+            filePathToUpload = compressedFile.path;
+            debugPrint(
+              'ELIRA DEBUG — Using compressed file: $filePathToUpload',
+            );
+          }
+        }
+      }
+
+      // Read and upload file
+      final fileBytes = await File(filePathToUpload).readAsBytes();
+      final uid = await SessionManager.getUserId() ?? mockUser['uid'] as String;
+      final uploadResult = await BackendApiService.uploadEvidence(
+        base64Content: base64Encode(fileBytes),
+        fileType: widget.mimeType,
+        userId: uid,
       );
 
-      // Anchor stub
-      final polygonHash = await ArweaveService.anchorHash(
-        filePath: widget.filePath,
-        arweaveTxId: txId,
-      );
+      final uploadData =
+          uploadResult['data'] as Map<String, dynamic>? ?? <String, dynamic>{};
+
+      final evidenceId =
+          (uploadData['id'] ?? 'local_${DateTime.now().millisecondsSinceEpoch}')
+              .toString();
+      final txId = (uploadData['arweaveTxId'] ?? '').toString();
+      final fileHash = (uploadData['fileHash'] ?? '').toString();
+      final polygonHash = (uploadData['polygonTxHash'] ?? '').toString();
+      final keyHex = (uploadData['keyHex'] ?? '').toString();
+      final ivHex = (uploadData['ivHex'] ?? '').toString();
 
       // Build model matching Firestore schema exactly
       final gps = widget.gps;
-      final uid = AuthService.currentUid ?? mockUser['uid'] as String;
+      final mediaType = widget.mimeType.startsWith('audio') ? 'audio' : 'video';
+      final createdAt = DateTime.now().toIso8601String();
+      final status = polygonHash.isNotEmpty ? 'anchored' : 'uploading';
 
       final newTestimony = TestimonyModel(
-        evidenceId: 'local_${DateTime.now().millisecondsSinceEpoch}',
+        evidenceId: evidenceId,
         caseId: mockCase['caseId'] as String,
         userId: uid,
-        type: 'video',
+        type: mediaType,
         title: title,
         localFilePath: widget.filePath,
         arweave: ArweaveData(
           txId: txId,
-          url: 'https://arweave.net/$txId',
+          url: txId.isEmpty ? '' : 'https://arweave.net/$txId',
         ),
         blockchain: BlockchainData(
-          fileHash: 'sha256_pending',
+          fileHash: fileHash,
           polygonTxHash: polygonHash,
         ),
         encryption: EncryptionData(
           keyId: 'local',
           status: 'active',
+          keyHex: keyHex,
+          ivHex: ivHex,
         ),
         metadata: MetadataModel(
           timestamp: DateTime.now().toIso8601String(),
@@ -278,65 +376,18 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
         ),
         ai: AiData(
           transcript: '',
-          summary:
-              'AI analysis pending. Summary will appear once processed.',
-          entities: EntitiesData(
-            persons: [],
-            dates: [],
-            locations: [],
-          ),
+          summary: 'AI analysis pending. Summary will appear once processed.',
+          sentiment: 'neutral',
+          riskLevel: 'LOW',
+          keywords: const [],
+          entities: EntitiesData(persons: [], dates: [], locations: []),
         ),
-        status: 'anchored',
-        createdAt: DateTime.now().toIso8601String(),
+        status: status,
+        createdAt: createdAt,
       );
 
       // Add to Riverpod global state
       ref.read(appProvider.notifier).addTestimony(newTestimony);
-
-      // Attempt Firestore save — fail silently
-      try {
-        final data = {
-          'evidenceId': newTestimony.evidenceId,
-          'caseId': newTestimony.caseId,
-          'userId': newTestimony.userId,
-          'type': newTestimony.type,
-          'title': newTestimony.title,
-          'status': newTestimony.status,
-          'createdAt': newTestimony.createdAt,
-          'arweave': {
-            'txId': newTestimony.arweave.txId,
-            'url': newTestimony.arweave.url,
-          },
-          'blockchain': {
-            'fileHash': newTestimony.blockchain.fileHash,
-            'polygonTxHash': newTestimony.blockchain.polygonTxHash,
-          },
-          'encryption': {
-            'keyId': newTestimony.encryption.keyId,
-            'status': newTestimony.encryption.status,
-          },
-          'metadata': {
-            'timestamp': newTestimony.metadata.timestamp,
-            'duration': newTestimony.metadata.duration,
-            'size': newTestimony.metadata.size,
-            'location': gps != null
-                ? {'lat': gps['lat'], 'lng': gps['lng']}
-                : null,
-          },
-          'ai': {
-            'transcript': newTestimony.ai.transcript,
-            'summary': newTestimony.ai.summary,
-            'entities': {
-              'persons': newTestimony.ai.entities.persons,
-              'dates': newTestimony.ai.entities.dates,
-              'locations': newTestimony.ai.entities.locations,
-            },
-          },
-        };
-        await FirestoreService.saveEvidence(data);
-      } catch (_) {
-        // fail silently
-      }
 
       // Dispose video controller then navigate
       _videoController?.removeListener(_videoListener);
@@ -346,7 +397,17 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
       if (mounted) context.go('/home');
     } catch (e) {
       debugPrint('Save testimony error: $e');
-      if (mounted) setState(() => _isSaving = false);
+      if (mounted) {
+        setState(() => _isSaving = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Upload failed. Ensure localhost backend is running.',
+            ),
+            backgroundColor: AppColours.dangerRed,
+          ),
+        );
+      }
     }
   }
 
@@ -355,16 +416,17 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 0),
       height: 200,
-      decoration: const BoxDecoration(
-        color: Color(0xFF1C1A2E),
-      ),
+      decoration: BoxDecoration(color: Color(0xFF1C1A2E)),
       child: Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             // Waveform icon
-            const Icon(Icons.graphic_eq_rounded,
-                color: AppColours.accentTeal, size: 56),
+            Icon(
+              Icons.graphic_eq_rounded,
+              color: AppColours.accentTeal,
+              size: 56,
+            ),
             const SizedBox(height: 16),
             // Duration label
             Text(
@@ -391,14 +453,12 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
               child: Container(
                 width: 56,
                 height: 56,
-                decoration: const BoxDecoration(
+                decoration: BoxDecoration(
                   color: AppColours.accentTeal,
                   shape: BoxShape.circle,
                 ),
                 child: Icon(
-                  _isPlaying
-                      ? Icons.pause_rounded
-                      : Icons.play_arrow_rounded,
+                  _isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
                   color: Colors.white,
                   size: 32,
                 ),
@@ -430,7 +490,9 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
                     bottom: false,
                     child: Padding(
                       padding: const EdgeInsets.symmetric(
-                          horizontal: 16, vertical: 12),
+                        horizontal: 16,
+                        vertical: 12,
+                      ),
                       child: Row(
                         children: [
                           GestureDetector(
@@ -442,7 +504,7 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
                                 color: AppColours.textDark.withOpacity(0.06),
                                 borderRadius: BorderRadius.circular(24),
                               ),
-                              child: const Icon(
+                              child: Icon(
                                 Icons.arrow_back_ios_new,
                                 color: AppColours.textDark,
                                 size: 20,
@@ -481,7 +543,7 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
                           if (_videoInitialized && _videoController != null)
                             VideoPlayer(_videoController!)
                           else
-                            const CircularProgressIndicator(
+                            CircularProgressIndicator(
                               color: AppColours.accentTeal,
                               strokeWidth: 2.5,
                             ),
@@ -606,7 +668,7 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
                           color: AppColours.textMuted,
                         ),
 
-                        if (_fileSizeLabel != null) ...[  
+                        if (_fileSizeLabel != null) ...[
                           const SizedBox(height: 8),
                           _MetaRow(
                             icon: Icons.sd_card_outlined,
@@ -627,7 +689,7 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
                           child: Row(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              const Icon(
+                              Icon(
                                 Icons.info_outline,
                                 color: AppColours.accentTeal,
                                 size: 18,
@@ -683,33 +745,57 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
                         width: double.infinity,
                         height: 52,
                         child: ElevatedButton(
-                          onPressed: _isSaving ? null : _saveTestimony,
+                          onPressed: (_isSaving || _isCompressing)
+                              ? null
+                              : _saveTestimony,
                           style: ElevatedButton.styleFrom(
                             backgroundColor: AppColours.accentTeal,
-                            disabledBackgroundColor:
-                                AppColours.accentTeal.withOpacity(0.5),
+                            disabledBackgroundColor: AppColours.accentTeal
+                                .withOpacity(0.5),
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(14),
                             ),
                             elevation: 0,
                           ),
-                          child: _isSaving
-                              ? const SizedBox(
-                                  width: 20,
-                                  height: 20,
-                                  child: CircularProgressIndicator(
-                                    color: Colors.white,
-                                    strokeWidth: 2.5,
-                                  ),
+                          child: _isCompressing
+                              ? Column(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    const SizedBox(
+                                      width: 16,
+                                      height: 16,
+                                      child: CircularProgressIndicator(
+                                        color: Colors.white,
+                                        strokeWidth: 2,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      'Compressing...',
+                                      style: GoogleFonts.dmSans(
+                                        fontSize: 12,
+                                        color: Colors.white,
+                                      ),
+                                    ),
+                                  ],
                                 )
-                              : Text(
-                                  'Save testimony',
-                                  style: GoogleFonts.dmSans(
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.w600,
-                                    color: Colors.white,
-                                  ),
-                                ),
+                              : (_isSaving
+                                    ? const SizedBox(
+                                        width: 20,
+                                        height: 20,
+                                        child: CircularProgressIndicator(
+                                          color: Colors.white,
+                                          strokeWidth: 2.5,
+                                        ),
+                                      )
+                                    : Text(
+                                        'Save testimony',
+                                        style: GoogleFonts.dmSans(
+                                          fontSize: 16,
+                                          fontWeight: FontWeight.w600,
+                                          color: Colors.white,
+                                        ),
+                                      )),
                         ),
                       ),
 
@@ -720,7 +806,9 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
                         width: double.infinity,
                         height: 52,
                         child: OutlinedButton(
-                          onPressed: _isSaving ? null : _confirmDiscard,
+                          onPressed: (_isSaving || _isCompressing)
+                              ? null
+                              : _confirmDiscard,
                           style: OutlinedButton.styleFrom(
                             side: BorderSide(
                               color: AppColours.divider,
@@ -770,13 +858,7 @@ class _MetaRow extends StatelessWidget {
       children: [
         Icon(icon, size: 16, color: color),
         const SizedBox(width: 8),
-        Text(
-          label,
-          style: GoogleFonts.dmSans(
-            fontSize: 14,
-            color: color,
-          ),
-        ),
+        Text(label, style: GoogleFonts.dmSans(fontSize: 14, color: color)),
       ],
     );
   }

@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -7,6 +8,9 @@ import 'package:file_picker/file_picker.dart';
 import '../../theme/app_colours.dart';
 import '../../store/app_store.dart';
 import '../../models/testimony_model.dart';
+import '../../services/backend_api_service.dart';
+import '../../utils/session_manager.dart';
+import '../../data/mock_data.dart';
 
 class UploadScreen extends ConsumerStatefulWidget {
   const UploadScreen({super.key});
@@ -54,51 +58,119 @@ class _UploadScreenState extends ConsumerState<UploadScreen> {
     if (!_canUpload) return;
     setState(() => _isLoading = true);
 
-    final ext = (_pickedFile!.extension ?? '').toLowerCase();
-    final now = DateTime.now();
+    try {
+      final ext = (_pickedFile!.extension ?? '').toLowerCase();
+      final now = DateTime.now();
 
-    final newEntry = TestimonyModel(
-      evidenceId: 'local_${now.millisecondsSinceEpoch}',
-      caseId: 'case_001',
-      userId: 'user_001',
-      type: ext == 'pdf' ? 'pdf' : 'image',
-      title: _titleController.text.trim(),
-      arweave: ArweaveData(
-        txId: 'pending_${now.millisecondsSinceEpoch}',
-        url: '',
-      ),
-      blockchain: BlockchainData(
-        fileHash: 'pending',
-        polygonTxHash: 'pending',
-      ),
-      encryption: EncryptionData(keyId: 'local', status: 'active'),
-      metadata: MetadataModel(
-        timestamp: now.toIso8601String(),
-        location: null,
-        duration: null,
-        size: _pickedFile!.size,
-      ),
-      ai: AiData(
-        transcript: '',
-        summary: 'Document uploaded. AI analysis pending.',
-        entities: EntitiesData(persons: [], dates: [], locations: []),
-      ),
-      status: 'uploading',
-      createdAt: now.toIso8601String(),
-    );
+      // Determine MIME type based on extension
+      final mimeType = _getMimeType(ext);
 
-    ref.read(appProvider.notifier).addTestimony(newEntry);
-    await Future.delayed(const Duration(milliseconds: 1500));
+      // Read file and convert to base64
+      final fileBytes = await File(_pickedFile!.path!).readAsBytes();
+      final base64Content = base64Encode(fileBytes);
+      final uid = await SessionManager.getUserId() ?? mockUser['uid'] as String;
 
-    if (!mounted) return;
-    setState(() {
-      _isLoading = false;
-      _isSuccess = true;
-    });
+      // Call backend API to upload evidence
+      final uploadResult = await BackendApiService.uploadEvidence(
+        base64Content: base64Content,
+        fileType: mimeType,
+        userId: uid,
+      );
 
-    await Future.delayed(const Duration(seconds: 1));
-    if (!mounted) return;
-    context.go('/home');
+      final uploadData = uploadResult['data'] as Map<String, dynamic>? ??
+          <String, dynamic>{};
+
+      final evidenceId = (uploadData['id'] ??
+              'local_${now.millisecondsSinceEpoch}')
+          .toString();
+      final txId = (uploadData['arweaveTxId'] ?? '').toString();
+      final fileHash = (uploadData['fileHash'] ?? '').toString();
+      final polygonHash = (uploadData['polygonTxHash'] ?? '').toString();
+      final keyHex = (uploadData['keyHex'] ?? '').toString();
+      final ivHex = (uploadData['ivHex'] ?? '').toString();
+
+      final mediaType = ext == 'pdf' ? 'pdf' : 'image';
+      final status = polygonHash.isNotEmpty ? 'anchored' : 'uploading';
+      final newEntry = TestimonyModel(
+        evidenceId: evidenceId,
+        caseId: mockCase['caseId'] as String,
+        userId: uid,
+        type: mediaType,
+        title: _titleController.text.trim(),
+        arweave: ArweaveData(
+          txId: txId,
+          url: txId.isEmpty ? '' : 'https://arweave.net/$txId',
+        ),
+        blockchain: BlockchainData(
+          fileHash: fileHash,
+          polygonTxHash: polygonHash,
+        ),
+        encryption: EncryptionData(
+          keyId: 'local',
+          status: 'active',
+          keyHex: keyHex,
+          ivHex: ivHex,
+        ),
+        metadata: MetadataModel(
+          timestamp: now.toIso8601String(),
+          location: null,
+          duration: null,
+          size: _pickedFile!.size,
+        ),
+        ai: AiData(
+          transcript: '',
+          summary: 'Document uploaded. AI analysis pending.',
+          sentiment: '',
+          riskLevel: '',
+          keywords: const [],
+          entities: EntitiesData(persons: [], dates: [], locations: []),
+        ),
+        status: status,
+        createdAt: now.toIso8601String(),
+        localFilePath: _pickedFile!.path,
+      );
+
+      // Add to Riverpod global state
+      ref.read(appProvider.notifier).addTestimony(newEntry);
+
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+        _isSuccess = true;
+      });
+
+      await Future.delayed(const Duration(seconds: 1));
+      if (!mounted) return;
+      context.go('/home');
+    } catch (error) {
+      if (mounted) {
+        setState(() => _isLoading = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Upload failed: ${error.toString()}',
+              style: GoogleFonts.dmSans(color: Colors.white),
+            ),
+            backgroundColor: const Color(0xFFDC143C),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    }
+  }
+
+  String _getMimeType(String ext) {
+    switch (ext.toLowerCase()) {
+      case 'pdf':
+        return 'application/pdf';
+      case 'jpg':
+      case 'jpeg':
+        return 'image/jpeg';
+      case 'png':
+        return 'image/png';
+      default:
+        return 'application/octet-stream';
+    }
   }
 
   @override
@@ -195,7 +267,7 @@ class _UploadScreenState extends ConsumerState<UploadScreen> {
                       ),
                       focusedBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(14),
-                        borderSide: const BorderSide(
+                        borderSide: BorderSide(
                           color: AppColours.accentTeal,
                           width: 1.5,
                         ),

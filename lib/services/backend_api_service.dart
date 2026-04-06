@@ -1,31 +1,73 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 class BackendApiService {
-  static final Uri _baseUri = Uri.parse(_resolveBaseUrl());
+  static Uri? _workingBaseUri;
+  static final List<Uri> _candidateBaseUris = _buildCandidateBaseUris();
   static const Duration _requestTimeout = Duration(seconds: 120);
   static const Duration _uploadTimeout = Duration(minutes: 15);
 
-  static String _resolveBaseUrl() {
+  static List<Uri> _buildCandidateBaseUris() {
     const fromDefine = String.fromEnvironment('API_BASE_URL', defaultValue: '');
-    if (fromDefine.isNotEmpty) return fromDefine;
+    final fromDefineUri =
+        fromDefine.isNotEmpty ? Uri.tryParse(fromDefine) : null;
+
+    List<Uri> defaults;
 
     if (kIsWeb) {
-      return 'http://localhost:5000';
+      defaults = <Uri>[Uri.parse('http://localhost:5000')];
+    } else if (Platform.isAndroid) {
+      // Try physical-device adb reverse first, then emulator host mapping.
+      defaults = <Uri>[
+        Uri.parse('http://127.0.0.1:5000'),
+        Uri.parse('http://10.0.2.2:5000'),
+        Uri.parse('http://localhost:5000'),
+      ];
+    } else {
+      defaults = <Uri>[Uri.parse('http://localhost:5000')];
     }
 
-    if (Platform.isAndroid) {
-      // Works on physical device when using: adb reverse tcp:5000 tcp:5000
-      return 'http://127.0.0.1:5000';
-    }
-
-    return 'http://localhost:5000';
+    if (fromDefineUri == null) return defaults;
+    return <Uri>[fromDefineUri, ...defaults.where((u) => u != fromDefineUri)];
   }
 
-  static String get baseUrl => _baseUri.toString();
+  static String get baseUrl =>
+      (_workingBaseUri ?? _candidateBaseUris.first).toString();
+
+  static Future<http.Response> _sendWithFallback(
+    Future<http.Response> Function(Uri baseUri) request,
+    Duration timeout,
+  ) async {
+    final orderedCandidates = <Uri>[
+      if (_workingBaseUri != null) _workingBaseUri!,
+      ..._candidateBaseUris.where((u) => u != _workingBaseUri),
+    ];
+
+    Object? lastError;
+    for (final baseUri in orderedCandidates) {
+      try {
+        final response = await request(baseUri).timeout(timeout);
+        _workingBaseUri = baseUri;
+        return response;
+      } on SocketException catch (e) {
+        lastError = e;
+      } on http.ClientException catch (e) {
+        lastError = e;
+      } on TimeoutException catch (e) {
+        lastError = e;
+      }
+    }
+
+    throw Exception(
+      'Local backend not reachable. Tried: '
+      '${orderedCandidates.map((u) => u.toString()).join(', ')}'
+      '${lastError != null ? '. Last error: $lastError' : ''}',
+    );
+  }
 
   static Future<Map<String, dynamic>> registerCitizen({
     required String name,
@@ -33,18 +75,18 @@ class BackendApiService {
     required String password,
     required String phone,
   }) async {
-    final response = await http
-        .post(
-          _baseUri.resolve('/auth/register'),
-          headers: {'Content-Type': 'application/json'},
-          body: jsonEncode({
-            'name': name,
-            'email': email,
-            'password': password,
-            'phone': phone,
-          }),
-        )
-        .timeout(_requestTimeout);
+    final response = await _sendWithFallback((baseUri) {
+      return http.post(
+        baseUri.resolve('/auth/register'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'name': name,
+          'email': email,
+          'password': password,
+          'phone': phone,
+        }),
+      );
+    }, _requestTimeout);
 
     final body = _decodeJson(response.body);
     if (response.statusCode >= 400) {
@@ -67,24 +109,27 @@ class BackendApiService {
     bool? onboardingComplete,
     String? pin,
   }) async {
-    final response = await http
-        .post(
-          _baseUri.resolve('/auth/profile'),
-          headers: {'Content-Type': 'application/json'},
-          body: jsonEncode({
-            'userId': userId,
-            if (name != null) 'name': name,
-            if (email != null) 'email': email,
-            if (phone != null) 'phone': phone,
-            if (gpsConsent != null) 'gpsConsent': gpsConsent,
-            if (contacts != null) 'contacts': contacts,
-            if (biometricEnabled != null) 'biometricEnabled': biometricEnabled,
-            if (onboardingComplete != null)
-              'onboardingComplete': onboardingComplete,
-            if (pin != null) 'pin': pin,
-          }),
-        )
-        .timeout(_uploadTimeout);
+    final payload = <String, dynamic>{'userId': userId};
+    if (name != null) payload['name'] = name;
+    if (email != null) payload['email'] = email;
+    if (phone != null) payload['phone'] = phone;
+    if (gpsConsent != null) payload['gpsConsent'] = gpsConsent;
+    if (contacts != null) payload['contacts'] = contacts;
+    if (biometricEnabled != null) {
+      payload['biometricEnabled'] = biometricEnabled;
+    }
+    if (onboardingComplete != null) {
+      payload['onboardingComplete'] = onboardingComplete;
+    }
+    if (pin != null) payload['pin'] = pin;
+
+    final response = await _sendWithFallback((baseUri) {
+      return http.post(
+        baseUri.resolve('/auth/profile'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode(payload),
+      );
+    }, _uploadTimeout);
 
     final body = _decodeJson(response.body);
     if (response.statusCode >= 400) {
@@ -101,17 +146,17 @@ class BackendApiService {
     required String fileType,
     required String userId,
   }) async {
-    final response = await http
-        .post(
-          _baseUri.resolve('/evidence/upload'),
-          headers: {'Content-Type': 'application/json'},
-          body: jsonEncode({
-            'fileContent': base64Content,
-            'fileType': fileType,
-            'userId': userId,
-          }),
-        )
-        .timeout(_uploadTimeout);
+    final response = await _sendWithFallback((baseUri) {
+      return http.post(
+        baseUri.resolve('/evidence/upload'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'fileContent': base64Content,
+          'fileType': fileType,
+          'userId': userId,
+        }),
+      );
+    }, _uploadTimeout);
 
     final body = _decodeJson(response.body);
     if (response.statusCode >= 400) {
@@ -131,11 +176,12 @@ class BackendApiService {
       throw Exception('userId is required to fetch citizen evidence');
     }
 
-    final uri = _baseUri
+    final response = await _sendWithFallback((baseUri) {
+      final uri = baseUri
         .resolve('/evidence/citizen')
         .replace(queryParameters: {'userId': safeUserId});
-
-    final response = await http.get(uri).timeout(const Duration(seconds: 20));
+      return http.get(uri);
+    }, const Duration(seconds: 20));
 
     final body = _decodeJson(response.body);
     if (response.statusCode >= 400) {

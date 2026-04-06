@@ -21,6 +21,7 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
+  static const Duration _backendReachabilityTimeout = Duration(seconds: 15);
   int _step = 1;
   final _phoneController = TextEditingController();
   final List<TextEditingController> _otpControllers = List.generate(
@@ -111,13 +112,21 @@ class _LoginScreenState extends State<LoginScreen> {
       onAutoVerified: () async {
         if (!mounted) return;
         try {
-          await _ensureBackendRegistration(fullNumber);
-        } catch (_) {
+          await _ensureBackendRegistration(
+            fullNumber,
+          ).timeout(_backendReachabilityTimeout);
+        } catch (e) {
+          final raw = e.toString();
+          final details = raw.startsWith('Exception: ')
+              ? raw.substring('Exception: '.length)
+              : raw;
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
                 content: Text(
-                  'Local backend not reachable. Start backend and try again.',
+                  details.isNotEmpty
+                      ? details
+                      : 'Local backend not reachable. Start backend and try again.',
                 ),
                 backgroundColor: AppColours.dangerRed,
               ),
@@ -159,14 +168,22 @@ class _LoginScreenState extends State<LoginScreen> {
     if (success) {
       final fullNumber = '+91${_phoneController.text.trim()}';
       try {
-        await _ensureBackendRegistration(fullNumber);
-      } catch (_) {
+        await _ensureBackendRegistration(
+          fullNumber,
+        ).timeout(_backendReachabilityTimeout);
+      } catch (e) {
+        final raw = e.toString();
+        final details = raw.startsWith('Exception: ')
+            ? raw.substring('Exception: '.length)
+            : raw;
         if (!mounted) return;
         setState(() => _isLoading = false);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              'Local backend not reachable. Start backend and try again.',
+              details.isNotEmpty
+                  ? details
+                  : 'Local backend not reachable. Start backend and try again.',
             ),
             backgroundColor: AppColours.dangerRed,
           ),
